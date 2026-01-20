@@ -1,11 +1,13 @@
 {
   "expo": {
-    "name": "Cougarbot",
-    "slug": "Cougarbot",
+    "name": "Campus Assistant",
+    "slug": "campus-assistant",
+    "onwer": "dannyg26",
     "version": "1.0.0",
+    "projectID": "656f4688-fd2b-4613-997a-37bcfd0ee33e",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "cougarbot",
+    "scheme": "campus-assistant",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
