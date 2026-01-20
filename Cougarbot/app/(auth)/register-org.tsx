@@ -27,6 +27,7 @@ export default function RegisterOrgScreen() {
   const [adminPassword, setAdminPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
   const insets = useSafeAreaInsets();
   const { authenticateWithTokens } = useAuth();
 
@@ -64,6 +65,7 @@ export default function RegisterOrgScreen() {
     setLoading(true);
     try {
       let orgProfilePic: string | null = null;
+
       if (orgImage) {
         if (orgImage.startsWith('file://')) {
           const resp = await fetch(orgImage);
@@ -93,7 +95,11 @@ export default function RegisterOrgScreen() {
         admin_password: adminPassword,
       });
 
-      await authenticateWithTokens(response.tokens, { email: adminEmail.trim(), name: adminName.trim() });
+      await authenticateWithTokens(response.tokens, {
+        email: adminEmail.trim(),
+        name: adminName.trim(),
+      });
+
       router.replace('/(tabs)');
     } catch (error: any) {
       Alert.alert('Registration Failed', error.response?.data?.detail || 'Could not create organization');
@@ -104,16 +110,23 @@ export default function RegisterOrgScreen() {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <View style={styles.container}>
-        <SafeAreaView style={styles.safeArea} edges={['bottom']}>
+      {/* Stack header is shown for this route, so we only apply safe area on bottom/left/right */}
+      <SafeAreaView style={styles.safeArea} edges={['bottom', 'left', 'right']}>
+        <View style={styles.container}>
           <ScrollView
+            // Prevent iOS from auto-insetting content under/around the native header
+            contentInsetAdjustmentBehavior="never"
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={styles.scrollView}
             contentContainerStyle={[
               styles.scrollContent,
-              { paddingTop: 20, paddingBottom: insets.bottom + 40 },
+              {
+                paddingTop: 16,
+                paddingBottom: insets.bottom + 40,
+              },
             ]}
-            style={styles.scrollView}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled">
+          >
             <View style={styles.content}>
               <View style={styles.headerContainer}>
                 <ThemedText style={styles.title}>Register Organization</ThemedText>
@@ -147,9 +160,7 @@ export default function RegisterOrgScreen() {
                       onChangeText={setOrgDomains}
                     />
                   </View>
-                  <ThemedText style={styles.hintText}>
-                    Separate multiple domains with commas.
-                  </ThemedText>
+                  <ThemedText style={styles.hintText}>Separate multiple domains with commas.</ThemedText>
                 </View>
 
                 <View style={styles.inputGroup}>
@@ -157,7 +168,11 @@ export default function RegisterOrgScreen() {
                   {orgImage ? (
                     <View>
                       <Image source={{ uri: orgImage }} style={styles.orgImage} />
-                      <TouchableOpacity onPress={() => setOrgImage(null)} style={styles.removeImageBtn}>
+                      <TouchableOpacity
+                        onPress={() => setOrgImage(null)}
+                        style={styles.removeImageBtn}
+                        activeOpacity={0.7}
+                      >
                         <ThemedText style={styles.removeImageText}>Remove image</ThemedText>
                       </TouchableOpacity>
                     </View>
@@ -230,7 +245,8 @@ export default function RegisterOrgScreen() {
                   style={[styles.button, loading && styles.buttonDisabled]}
                   onPress={handleRegisterOrg}
                   disabled={loading}
-                  activeOpacity={0.8}>
+                  activeOpacity={0.8}
+                >
                   {loading ? (
                     <ActivityIndicator color="#FFFFFF" />
                   ) : (
@@ -239,26 +255,25 @@ export default function RegisterOrgScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity onPress={() => router.back()} style={styles.linkButton} activeOpacity={0.7}>
-                  <ThemedText style={styles.linkText}>
-                    Back to Sign In
-                  </ThemedText>
+                  <ThemedText style={styles.linkText}>Back to Sign In</ThemedText>
                 </TouchableOpacity>
               </View>
             </View>
           </ScrollView>
-        </SafeAreaView>
-      </View>
+        </View>
+      </SafeAreaView>
     </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#F8F8F8',
   },
-  safeArea: {
+  container: {
     flex: 1,
+    backgroundColor: '#F8F8F8',
   },
   scrollView: {
     flex: 1,
@@ -281,6 +296,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#2C3E50',
     marginBottom: 8,
+    paddingTop: 20,
     textAlign: 'center',
   },
   subtitle: {

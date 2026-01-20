@@ -115,8 +115,8 @@ export default function RegisterScreen() {
       >
         <View style={styles.content}>
           <View style={styles.headerContainer}>
-            <ThemedText style={styles.title}>Join UniAI</ThemedText>
-            <ThemedText style={styles.subtitle}>Personal AI Powered University Assistant</ThemedText>
+            <ThemedText style={styles.title}>Join Campus Assistant</ThemedText>
+            <ThemedText style={styles.subtitle}>Personal AI Powered University Assistant Tool</ThemedText>
           </View>
 
           <View style={styles.formContainer}>
@@ -185,7 +185,7 @@ export default function RegisterScreen() {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
-                  placeholder="John Doe"
+                  placeholder="Name"
                   placeholderTextColor="#888888"
                   value={name}
                   onChangeText={setName}
@@ -221,7 +221,7 @@ export default function RegisterScreen() {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
-                  placeholder="password"
+                  placeholder="Password"
                   placeholderTextColor="#888888"
                   value={password}
                   onChangeText={setPassword}
@@ -239,7 +239,7 @@ export default function RegisterScreen() {
               <View style={styles.inputWrapper}>
                 <TextInput
                   style={styles.input}
-                  placeholder="password"
+                  placeholder="Password"
                   placeholderTextColor="#888888"
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
