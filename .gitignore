@@ -1,0 +1,36 @@
+# General
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python envs
+.venv/
+venv/
+env/
+
+# Local databases
+backend/app.db
+backend/app.db-journal
+*.sqlite
+*.sqlite3
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node / Expo
+**/node_modules/
+Cougarbot/.expo/
+Cougarbot/.expo-shared/
+Cougarbot/dist/
+Cougarbot/web-build/
+Cougarbot/expo-env.d.ts
+Cougarbot/android/
+Cougarbot/ios/
