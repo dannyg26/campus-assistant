@@ -358,7 +358,7 @@ export default function PlacesScreen() {
   const [requestLocationDescription, setRequestLocationDescription] = useState('');
   const [requestLocationTopQualities, setRequestLocationTopQualities] = useState('');
   const [requestLocationLevel, setRequestLocationLevel] = useState<'high' | 'moderate' | 'low' | ''>('');
-  const [requestLocationImage, setRequestLocationImage] = useState<string | null>(null);
+  const [requestLocationImages, setRequestLocationImages] = useState<string[]>([]);
   const [requestLocationSubmitting, setRequestLocationSubmitting] = useState(false);
 
   const requestLocationSwipeResponder = useMemo(
@@ -718,7 +718,85 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-  const pickRequestLocationImage = async () => {
+  const buildPicturesFromUris = async (uris: string[], caption?: string) => {
+    if (!uris.length) return undefined;
+    const pictures = await Promise.all(
+      uris.map(async (uri) => {
+        if (uri.startsWith('file://')) {
+          const resp = await fetch(uri);
+          const bl = await resp.blob();
+          const img = await new Promise<string>((res, rej) => {
+            const r = new FileReader();
+            r.onloadend = () => res(r.result as string);
+            r.onerror = rej;
+            r.readAsDataURL(bl);
+          });
+          return { url: img, caption };
+        }
+        return { url: uri, caption };
+      })
+    );
+    return pictures;
+  };
+
+  const removeRequestLocationImage = (index: number) => {
+    setRequestLocationImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const moveRequestLocationImage = (index: number, direction: 'left' | 'right') => {
+    setRequestLocationImages((prev) => {
+      const next = [...prev];
+      const targetIndex = direction === 'left' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= next.length) return prev;
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const renderLocationImages = (
+    pictures: Array<LocationPicture | string | null | undefined> | undefined,
+    imageStyle: any,
+    placeholderStyle: any
+  ) => {
+    const normalized = (pictures || [])
+      .map((pic) => (typeof pic === 'string' ? { url: pic } : pic))
+      .filter((pic): pic is LocationPicture => !!pic && typeof pic.url === 'string' && pic.url.length > 0);
+
+    if (normalized.length === 0) {
+      return (
+        <View style={[imageStyle, placeholderStyle]}>
+          <ThemedText style={styles.placeholderText}>No Image</ThemedText>
+        </View>
+      );
+    }
+
+    if (normalized.length === 1) {
+      return (
+        <Image source={{ uri: normalized[0].url }} style={imageStyle} resizeMode="cover" />
+      );
+    }
+
+    return (
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={imageStyle}
+      >
+        {normalized.map((pic, idx) => (
+          <Image
+            key={`${pic.url}-${idx}`}
+            source={{ uri: pic.url }}
+            style={imageStyle}
+            resizeMode="cover"
+          />
+        ))}
+      </ScrollView>
+    );
+  };
+
+  const pickRequestLocationImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
@@ -726,12 +804,18 @@ const countQualities = (text?: string) => {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: 8,
       aspect: [4, 3],
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) {
-      setRequestLocationImage(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      const selectedUris = result.assets.map((asset) => asset.uri);
+      setRequestLocationImages((prev) => {
+        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+        return next.slice(0, 8);
+      });
     }
   };
 
@@ -746,22 +830,10 @@ const countQualities = (text?: string) => {
     }
     setRequestLocationSubmitting(true);
     try {
-      let pictures;
-      if (requestLocationImage) {
-        if (requestLocationImage.startsWith('file://')) {
-          const resp = await fetch(requestLocationImage);
-          const bl = await resp.blob();
-          const img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-          pictures = [{ url: img, caption: requestLocationTopQualities }];
-        } else {
-          pictures = [{ url: requestLocationImage, caption: requestLocationTopQualities }];
-        }
-      }
+      const pictures = await buildPicturesFromUris(
+        requestLocationImages,
+        requestLocationTopQualities.trim() || undefined
+      );
       await apiService.createLocationRequest({
         name: requestLocationName.trim(),
         address: requestLocationAddress.trim(),
@@ -777,7 +849,7 @@ const countQualities = (text?: string) => {
       setRequestLocationDescription('');
       setRequestLocationTopQualities('');
       setRequestLocationLevel('');
-      setRequestLocationImage(null);
+      setRequestLocationImages([]);
     } catch (e: any) {
       Alert.alert('Error', e?.response?.data?.detail || 'Failed to submit request');
     } finally {
@@ -872,7 +944,6 @@ const countQualities = (text?: string) => {
         }
         renderItem={({ item }) => {
           const qualities = parseQualities(item.most_known_for);
-          const primaryImage = item.pictures?.[0]?.url;
 
           return (
             <TouchableOpacity
@@ -880,17 +951,7 @@ const countQualities = (text?: string) => {
               onPress={() => openDetailModal(item)}
               activeOpacity={0.9}>
               {/* Image */}
-              {primaryImage ? (
-                <Image
-                  source={{ uri: primaryImage }}
-                  style={styles.cardImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
-                  <ThemedText style={styles.placeholderText}>No Image</ThemedText>
-                </View>
-              )}
+              {renderLocationImages(item.pictures, styles.cardImage, styles.cardImagePlaceholder)}
 
               <View style={styles.cardContent}>
                 {/* Name and Rating */}
@@ -1105,14 +1166,42 @@ const countQualities = (text?: string) => {
                 <ThemedText style={styles.requestLabel}>Image (optional)</ThemedText>
                 <TouchableOpacity
                   style={styles.requestImageButton}
-                  onPress={pickRequestLocationImage}
+                  onPress={pickRequestLocationImages}
                   activeOpacity={0.7}>
                   <ThemedText style={styles.requestImageButtonText}>
-                    {requestLocationImage ? 'Change Image' : 'Choose from Camera Roll'}
+                    {requestLocationImages.length > 0 ? 'Add More Photos' : 'Choose from Camera Roll'}
                   </ThemedText>
                 </TouchableOpacity>
-                {requestLocationImage ? (
-                  <Image source={{ uri: requestLocationImage }} style={styles.requestImagePreview} />
+                {requestLocationImages.length > 0 ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestImagePreviewRow}>
+                    {requestLocationImages.map((uri, idx) => (
+                      <View key={`${uri}-${idx}`} style={styles.requestImageThumbWrap}>
+                        <Image source={{ uri }} style={styles.requestImagePreviewThumb} />
+                        <View style={styles.requestImageActions}>
+                          <TouchableOpacity
+                            style={styles.requestImageActionButton}
+                            onPress={() => moveRequestLocationImage(idx, 'left')}
+                            disabled={idx === 0}
+                            activeOpacity={0.7}>
+                            <ThemedText style={styles.requestImageActionText}>‹</ThemedText>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.requestImageActionButton}
+                            onPress={() => moveRequestLocationImage(idx, 'right')}
+                            disabled={idx === requestLocationImages.length - 1}
+                            activeOpacity={0.7}>
+                            <ThemedText style={styles.requestImageActionText}>›</ThemedText>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.requestImageActionButton, styles.requestImageRemoveButton]}
+                            onPress={() => removeRequestLocationImage(idx)}
+                            activeOpacity={0.7}>
+                            <ThemedText style={styles.requestImageActionText}>✕</ThemedText>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </ScrollView>
                 ) : null}
               </View>
 
@@ -1245,16 +1334,10 @@ const countQualities = (text?: string) => {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag">
-              {selectedLocation.pictures?.[0]?.url ? (
-                <Image
-                  source={{ uri: selectedLocation.pictures[0].url }}
-                  style={styles.detailImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.detailImage, styles.detailImagePlaceholder]}>
-                  <ThemedText style={styles.placeholderText}>No Image</ThemedText>
-                </View>
+              {renderLocationImages(
+                selectedLocation.pictures,
+                styles.detailImage,
+                styles.detailImagePlaceholder
               )}
 
               {selectedLocation.description ? (
@@ -2393,6 +2476,40 @@ const styles = StyleSheet.create({
     color: '#5FA8D3',
     fontSize: 14,
     fontWeight: '600',
+  },
+  requestImagePreviewRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  requestImageThumbWrap: {
+    marginRight: 10,
+  },
+  requestImagePreviewThumb: {
+    width: 120,
+    height: 90,
+    borderRadius: 10,
+  },
+  requestImageActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  requestImageActionButton: {
+    borderWidth: 1,
+    borderColor: '#E8D5C4',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginRight: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  requestImageRemoveButton: {
+    borderColor: '#FF6B6B',
+  },
+  requestImageActionText: {
+    color: '#5FA8D3',
+    fontSize: 12,
+    fontWeight: '700',
   },
   requestImagePreview: {
     width: '100%',

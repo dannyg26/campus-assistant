@@ -267,7 +267,7 @@ export default function HomeScreen() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   // Announcements tab
@@ -749,6 +749,41 @@ export default function HomeScreen() {
     }
   };
 
+  const renderPlaceImages = (
+    pictures: Array<{ url: string } | string | null | undefined> | undefined,
+    imageStyle: any,
+    placeholderStyle: any
+  ) => {
+    const normalized = (pictures || [])
+      .map((pic) => (typeof pic === 'string' ? { url: pic } : pic))
+      .filter((pic): pic is { url: string } => !!pic && typeof pic.url === 'string' && pic.url.length > 0);
+
+    if (normalized.length === 0) {
+      return (
+        <View style={[imageStyle, placeholderStyle]}>
+          <ThemedText style={styles.placeholderText}>No Image</ThemedText>
+        </View>
+      );
+    }
+
+    if (normalized.length === 1) {
+      return <Image source={{ uri: normalized[0].url }} style={imageStyle} resizeMode="cover" />;
+    }
+
+    return (
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={imageStyle}
+      >
+        {normalized.map((pic, idx) => (
+          <Image key={`${pic.url}-${idx}`} source={{ uri: pic.url }} style={imageStyle} resizeMode="cover" />
+        ))}
+      </ScrollView>
+    );
+  };
+
   if (authLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -827,17 +862,10 @@ export default function HomeScreen() {
               keyboardDismissMode="on-drag"
               renderItem={({ item }) => {
                 const qualities = parseQualities(item.most_known_for);
-                const primaryImage = item.pictures?.[0]?.url;
 
                 return (
                   <TouchableOpacity style={styles.locationCard} activeOpacity={0.9}>
-                    {primaryImage ? (
-                      <Image source={{ uri: primaryImage }} style={styles.cardImage} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
-                        <ThemedText style={styles.placeholderText}>No Image</ThemedText>
-                      </View>
-                    )}
+                    {renderPlaceImages(item.pictures, styles.cardImage, styles.cardImagePlaceholder)}
 
                     <View style={styles.cardContent}>
                       <View style={styles.cardHeader}>
@@ -951,13 +979,7 @@ export default function HomeScreen() {
                           style={styles.locationCard}
                           onPress={() => openPlaceDetail(it.data)}
                           activeOpacity={0.9}>
-                          {it.data.pictures?.[0]?.url ? (
-                            <Image source={{ uri: it.data.pictures[0].url }} style={styles.cardImage} resizeMode="cover" />
-                          ) : (
-                            <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
-                              <ThemedText style={styles.placeholderText}>No Image</ThemedText>
-                            </View>
-                          )}
+                          {renderPlaceImages(it.data.pictures, styles.cardImage, styles.cardImagePlaceholder)}
                           <View style={styles.cardContent}>
                             <View style={styles.cardHeader}>
                               <View style={styles.nameRatingContainer}>
@@ -1615,13 +1637,11 @@ export default function HomeScreen() {
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
                 <ThemedText style={styles.eventDetailTitle}>{selectedPlace.name}</ThemedText>
 
-                {selectedPlace.pictures?.[0]?.url ? (
-                  <Image
-                    source={{ uri: selectedPlace.pictures[0].url }}
-                    style={styles.eventDetailImage}
-                    resizeMode="cover"
-                  />
-                ) : null}
+                {renderPlaceImages(
+                  selectedPlace.pictures,
+                  styles.eventDetailImage,
+                  styles.cardImagePlaceholder
+                )}
 
                 {selectedPlace.address ? (
                   <ThemedText style={styles.eventDetailMeta}>Address: {selectedPlace.address}</ThemedText>

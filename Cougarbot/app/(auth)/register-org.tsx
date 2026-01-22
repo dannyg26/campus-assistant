@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  RefreshControl,
   Keyboard,
   TouchableWithoutFeedback,
   Image,
@@ -27,6 +28,7 @@ export default function RegisterOrgScreen() {
   const [adminPassword, setAdminPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const insets = useSafeAreaInsets();
   const { authenticateWithTokens } = useAuth();
@@ -108,6 +110,11 @@ export default function RegisterOrgScreen() {
     }
   };
 
+  const onRefresh = () => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 400);
+  };
+
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       {/* Stack header is shown for this route, so we only apply safe area on bottom/left/right */}
@@ -119,6 +126,7 @@ export default function RegisterOrgScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             style={styles.scrollView}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             contentContainerStyle={[
               styles.scrollContent,
               {

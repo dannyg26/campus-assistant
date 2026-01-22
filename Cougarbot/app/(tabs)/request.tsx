@@ -35,6 +35,38 @@ const countQualities = (text?: string) => {
     .map((q) => q.trim())
     .filter(Boolean).length;
 };
+
+const buildPicturesFromUris = async (uris: string[], caption?: string) => {
+  if (!uris.length) return undefined;
+  const pictures = await Promise.all(
+    uris.map(async (uri) => {
+      if (uri.startsWith('file://')) {
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const reader = new FileReader();
+
+        const base64data = await new Promise<string>((resolve, reject) => {
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+        return { url: base64data, caption };
+      }
+      return { url: uri, caption };
+    })
+  );
+  return pictures;
+};
+
+const moveImage = (list: string[], index: number, direction: 'left' | 'right') => {
+  const next = [...list];
+  const targetIndex = direction === 'left' ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= next.length) return list;
+  const [moved] = next.splice(index, 1);
+  next.splice(targetIndex, 0, moved);
+  return next;
+};
 interface LocationRequest {
   id: string;
   name: string;
@@ -89,7 +121,7 @@ export default function RequestScreen() {
   const [editLocationDescription, setEditLocationDescription] = useState('');
   const [editLocationTopQualities, setEditLocationTopQualities] = useState('');
   const [editLocationLevelOfBusiness, setEditLocationLevelOfBusiness] = useState<'high' | 'moderate' | 'low' | ''>('');
-  const [editLocationSelectedImage, setEditLocationSelectedImage] = useState<string | null>(null);
+  const [editLocationSelectedImages, setEditLocationSelectedImages] = useState<string[]>([]);
   
   // Form state for creating new location
   const [showCreateLocationModal, setShowCreateLocationModal] = useState(false);
@@ -98,7 +130,7 @@ export default function RequestScreen() {
   const [newLocationDescription, setNewLocationDescription] = useState('');
   const [newLocationTopQualities, setNewLocationTopQualities] = useState('');
   const [newLocationLevelOfBusiness, setNewLocationLevelOfBusiness] = useState<'high' | 'moderate' | 'low' | ''>('');
-  const [newLocationSelectedImage, setNewLocationSelectedImage] = useState<string | null>(null);
+  const [newLocationSelectedImages, setNewLocationSelectedImages] = useState<string[]>([]);
   
   // State for manage members
   const [members, setMembers] = useState<any[]>([]);
@@ -333,17 +365,22 @@ export default function RequestScreen() {
   };
 
   const openLocationDetail = (location: any) => {
+    const normalizedPictures = Array.isArray(location.pictures)
+      ? location.pictures
+          .map((pic: any) => (typeof pic === 'string' ? pic : pic?.url))
+          .filter((url: any) => typeof url === 'string' && url.length > 0)
+      : [];
     setSelectedLocation(location);
     setEditLocationName(location.name || '');
     setEditLocationAddress(location.address || '');
     setEditLocationDescription(location.description || '');
     setEditLocationTopQualities(location.most_known_for || '');
     setEditLocationLevelOfBusiness(location.level_of_business || '');
-    setEditLocationSelectedImage(location.pictures?.[0]?.url || null);
+    setEditLocationSelectedImages(normalizedPictures);
     setShowLocationDetailModal(true);
   };
 
-  const pickEditLocationImage = async () => {
+  const pickEditLocationImages = async () => {
     // Request permission
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -354,13 +391,19 @@ export default function RequestScreen() {
     // Launch image picker
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: 8,
       aspect: [4, 3],
       quality: 0.8,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setEditLocationSelectedImage(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      const selectedUris = result.assets.map((asset) => asset.uri);
+      setEditLocationSelectedImages((prev) => {
+        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+        return next.slice(0, 8);
+      });
     }
   };
 
@@ -378,25 +421,10 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 if a new image was selected
-      let pictures;
-      if (editLocationSelectedImage && editLocationSelectedImage.startsWith('file://')) {
-        // New image selected, convert to base64
-        const response = await fetch(editLocationSelectedImage);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        pictures = [{ url: base64data, caption: editLocationTopQualities }];
-      } else if (editLocationSelectedImage && !editLocationSelectedImage.startsWith('file://')) {
-        // Existing image URL
-        pictures = [{ url: editLocationSelectedImage, caption: editLocationTopQualities }];
-      }
+      const pictures = await buildPicturesFromUris(
+        editLocationSelectedImages,
+        editLocationTopQualities.trim() || undefined
+      );
 
       await apiService.updateLocation(selectedLocation.id, {
         name: editLocationName.trim(),
@@ -416,7 +444,7 @@ export default function RequestScreen() {
     }
   };
 
-  const pickNewLocationImage = async () => {
+  const pickNewLocationImages = async () => {
     // Request permission
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -427,13 +455,19 @@ export default function RequestScreen() {
     // Launch image picker
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: 8,
       aspect: [4, 3],
       quality: 0.8,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setNewLocationSelectedImage(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      const selectedUris = result.assets.map((asset) => asset.uri);
+      setNewLocationSelectedImages((prev) => {
+        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+        return next.slice(0, 8);
+      });
     }
   };
 
@@ -449,21 +483,10 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 if an image was selected
-      let pictures;
-      if (newLocationSelectedImage && newLocationSelectedImage.startsWith('file://')) {
-        const response = await fetch(newLocationSelectedImage);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        pictures = [{ url: base64data, caption: newLocationTopQualities }];
-      }
+      const pictures = await buildPicturesFromUris(
+        newLocationSelectedImages,
+        newLocationTopQualities.trim() || undefined
+      );
 
       await apiService.createLocation({
         name: newLocationName.trim(),
@@ -478,7 +501,7 @@ export default function RequestScreen() {
       setNewLocationAddress('');
       setNewLocationTopQualities('');
       setNewLocationLevelOfBusiness('');
-      setNewLocationSelectedImage(null);
+      setNewLocationSelectedImages([]);
       setShowCreateLocationModal(false);
       loadLocations();
     } catch (error: any) {
@@ -1010,7 +1033,7 @@ export default function RequestScreen() {
       loadMembers();
       
       // If editing self, refresh user context
-      if (selectedMember.id === user?.id) {
+      if (selectedMember.id === user?.user_id) {
         await refreshUser();
       }
       
@@ -1870,8 +1893,8 @@ export default function RequestScreen() {
             {requests.length > 0 && (
               <View style={styles.myRequestsSection}>
                 <ThemedText style={styles.sectionTitle}>My Requests</ThemedText>
-                {requests.map((request) => (
-                  <View key={request.id} style={styles.requestCard}>
+                {requests.map((request, index) => (
+                  <View key={`${request.id || 'request'}-${index}`} style={styles.requestCard}>
                     <View style={styles.requestHeader}>
                       <ThemedText style={styles.requestName}>{request.name}</ThemedText>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -2016,8 +2039,8 @@ export default function RequestScreen() {
             {eventRequests.length > 0 && (
               <View style={styles.myRequestsSection}>
                 <ThemedText style={styles.sectionTitle}>My Requests</ThemedText>
-                {eventRequests.map((er) => (
-                  <View key={er.id} style={styles.requestCard}>
+                {eventRequests.map((er, index) => (
+                  <View key={`${er.id || 'event-request'}-${index}`} style={styles.requestCard}>
                     <View style={styles.requestHeader}>
                       <ThemedText style={styles.requestName}>{er.event_name}</ThemedText>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -2126,8 +2149,8 @@ export default function RequestScreen() {
             {announcementRequests.length > 0 && (
               <View style={styles.myRequestsSection}>
                 <ThemedText style={styles.sectionTitle}>My Requests</ThemedText>
-                {announcementRequests.map((ar) => (
-                  <View key={ar.id} style={styles.requestCard}>
+                {announcementRequests.map((ar, index) => (
+                  <View key={`${ar.id || 'announcement-request'}-${index}`} style={styles.requestCard}>
                     <View style={styles.requestHeader}>
                       <ThemedText style={styles.requestName}>{ar.title}</ThemedText>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -2297,9 +2320,9 @@ export default function RequestScreen() {
         {(locationRequestSearch.trim() ? requests.filter((r) => {
           const q = locationRequestSearch.trim().toLowerCase();
           return (r.name || '').toLowerCase().includes(q) || (r.address || '').toLowerCase().includes(q);
-        }) : requests).map((request) => (
+        }) : requests).map((request, index) => (
           <TouchableOpacity
-            key={request.id}
+            key={`${request.id || 'location-request'}-${index}`}
             style={styles.requestCard}
             onPress={() => openRequestDetail(request)}
             activeOpacity={0.9}>
@@ -2642,9 +2665,9 @@ export default function RequestScreen() {
             {(locationSearch.trim() ? locations.filter((l) => {
               const q = locationSearch.trim().toLowerCase();
               return (l.name || '').toLowerCase().includes(q) || (l.address || '').toLowerCase().includes(q);
-            }) : locations).map((location) => (
+            }) : locations).map((location, index) => (
               <TouchableOpacity
-                key={location.id}
+                key={`${location.id || 'location'}-${index}`}
                 style={styles.requestCard}
                 onPress={() => openLocationDetail(location)}
                 activeOpacity={0.9}>
@@ -2729,18 +2752,32 @@ export default function RequestScreen() {
                   styles.detailContent,
                   { paddingBottom: insets.bottom + 40 },
                 ]}
-                showsVerticalScrollIndicator={false}>
-                {editLocationSelectedImage ? (
+                showsVerticalScrollIndicator={false}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+              {editLocationSelectedImages.length > 0 ? (
+                editLocationSelectedImages.length === 1 ? (
                   <Image
-                    source={{ uri: editLocationSelectedImage }}
+                    source={{ uri: editLocationSelectedImages[0] }}
                     style={styles.detailImage}
                     resizeMode="cover"
                   />
                 ) : (
-                  <View style={[styles.detailImage, styles.detailImagePlaceholder]}>
-                    <ThemedText style={styles.placeholderText}>No Image</ThemedText>
-                  </View>
-                )}
+                  <ScrollView
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.detailImage}
+                  >
+                    {editLocationSelectedImages.map((uri, idx) => (
+                      <Image key={`${uri}-${idx}`} source={{ uri }} style={styles.detailImage} resizeMode="cover" />
+                    ))}
+                  </ScrollView>
+                )
+              ) : (
+                <View style={[styles.detailImage, styles.detailImagePlaceholder]}>
+                  <ThemedText style={styles.placeholderText}>No Image</ThemedText>
+                </View>
+              )}
 
                 <View style={styles.detailEditForm}>
                   {selectedLocation.rating !== undefined && (
@@ -2841,18 +2878,48 @@ export default function RequestScreen() {
                     <ThemedText style={styles.label}>Image</ThemedText>
                     <TouchableOpacity
                       style={styles.imagePickerButton}
-                      onPress={pickEditLocationImage}
+                      onPress={pickEditLocationImages}
                       activeOpacity={0.7}>
                       <ThemedText style={styles.imagePickerButtonText}>
-                        {editLocationSelectedImage ? 'Change Image' : 'Choose from Camera Roll'}
+                        {editLocationSelectedImages.length > 0 ? 'Add Photos' : 'Choose from Camera Roll'}
                       </ThemedText>
                     </TouchableOpacity>
-                    {editLocationSelectedImage && (
-                      <Image
-                        source={{ uri: editLocationSelectedImage }}
-                        style={styles.imagePreview}
-                        resizeMode="cover"
-                      />
+                    {editLocationSelectedImages.length > 0 && (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagePreviewRow}>
+                        {editLocationSelectedImages.map((uri, idx) => (
+                          <View key={`${uri}-${idx}`} style={styles.imagePreviewThumbWrap}>
+                            <Image source={{ uri }} style={styles.imagePreviewThumb} resizeMode="cover" />
+                            <View style={styles.imagePreviewActions}>
+                              <TouchableOpacity
+                                style={styles.imagePreviewActionButton}
+                                onPress={() =>
+                                  setEditLocationSelectedImages((prev) => moveImage(prev, idx, 'left'))
+                                }
+                                disabled={idx === 0}
+                                activeOpacity={0.7}>
+                                <ThemedText style={styles.imagePreviewActionText}>‹</ThemedText>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.imagePreviewActionButton}
+                                onPress={() =>
+                                  setEditLocationSelectedImages((prev) => moveImage(prev, idx, 'right'))
+                                }
+                                disabled={idx === editLocationSelectedImages.length - 1}
+                                activeOpacity={0.7}>
+                                <ThemedText style={styles.imagePreviewActionText}>›</ThemedText>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.imagePreviewActionButton, styles.imagePreviewRemoveButton]}
+                                onPress={() =>
+                                  setEditLocationSelectedImages((prev) => prev.filter((_, i) => i !== idx))
+                                }
+                                activeOpacity={0.7}>
+                                <ThemedText style={styles.imagePreviewActionText}>✕</ThemedText>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        ))}
+                      </ScrollView>
                     )}
                   </View>
 
@@ -2918,7 +2985,8 @@ export default function RequestScreen() {
             <ScrollView
               style={styles.detailScrollView}
               contentContainerStyle={styles.detailContent}
-              showsVerticalScrollIndicator={false}>
+              showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
               <View style={styles.detailEditForm}>
                 <View style={styles.inputGroup}>
                   <ThemedText style={styles.label}>Location Name *</ThemedText>
@@ -2994,18 +3062,48 @@ export default function RequestScreen() {
                   <ThemedText style={styles.label}>Image (optional)</ThemedText>
                   <TouchableOpacity
                     style={styles.imagePickerButton}
-                    onPress={pickNewLocationImage}
+                    onPress={pickNewLocationImages}
                     activeOpacity={0.7}>
                     <ThemedText style={styles.imagePickerButtonText}>
-                      {newLocationSelectedImage ? 'Change Image' : 'Choose from Camera Roll'}
+                      {newLocationSelectedImages.length > 0 ? 'Add Photos' : 'Choose from Camera Roll'}
                     </ThemedText>
                   </TouchableOpacity>
-                  {newLocationSelectedImage && (
-                    <Image
-                      source={{ uri: newLocationSelectedImage }}
-                      style={styles.imagePreview}
-                      resizeMode="cover"
-                    />
+                  {newLocationSelectedImages.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagePreviewRow}>
+                      {newLocationSelectedImages.map((uri, idx) => (
+                        <View key={`${uri}-${idx}`} style={styles.imagePreviewThumbWrap}>
+                          <Image source={{ uri }} style={styles.imagePreviewThumb} resizeMode="cover" />
+                          <View style={styles.imagePreviewActions}>
+                            <TouchableOpacity
+                              style={styles.imagePreviewActionButton}
+                              onPress={() =>
+                                setNewLocationSelectedImages((prev) => moveImage(prev, idx, 'left'))
+                              }
+                              disabled={idx === 0}
+                              activeOpacity={0.7}>
+                              <ThemedText style={styles.imagePreviewActionText}>‹</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.imagePreviewActionButton}
+                              onPress={() =>
+                                setNewLocationSelectedImages((prev) => moveImage(prev, idx, 'right'))
+                              }
+                              disabled={idx === newLocationSelectedImages.length - 1}
+                              activeOpacity={0.7}>
+                              <ThemedText style={styles.imagePreviewActionText}>›</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.imagePreviewActionButton, styles.imagePreviewRemoveButton]}
+                              onPress={() =>
+                                setNewLocationSelectedImages((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              activeOpacity={0.7}>
+                              <ThemedText style={styles.imagePreviewActionText}>✕</ThemedText>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </ScrollView>
                   )}
                 </View>
 
@@ -3106,8 +3204,8 @@ export default function RequestScreen() {
                   <ThemedText style={styles.emptyText}>No requests</ThemedText>
                 </View>
               ) : (
-                announcementRequests.map((ar) => (
-                  <View key={ar.id} style={styles.requestCard}>
+                announcementRequests.map((ar, index) => (
+                  <View key={`${ar.id || 'announcement-request'}-${index}`} style={styles.requestCard}>
                     {ar.image ? (
                       <Image source={{ uri: ar.image }} style={styles.announcementCardImage} resizeMode="cover" />
                     ) : null}
@@ -3156,8 +3254,8 @@ export default function RequestScreen() {
               ) : (
                 <>
               <ThemedText style={styles.sectionLabel}>{announcementsFilter === 'posted' ? 'Posted' : 'Drafts'}</ThemedText>
-              {filteredAnnouncements.map((a) => (
-                <View key={a.id} style={styles.requestCard}>
+              {filteredAnnouncements.map((a, index) => (
+                <View key={`${a.id || 'announcement'}-${index}`} style={styles.requestCard}>
                   {a.image ? (
                     <Image source={{ uri: a.image }} style={styles.announcementCardImage} resizeMode="cover" />
                   ) : null}
@@ -3588,8 +3686,8 @@ export default function RequestScreen() {
                       <ThemedText style={styles.emptyText}>No event requests</ThemedText>
                     </View>
                   ) : (
-                    filteredEventRequests.map((er) => (
-                      <View key={er.id} style={styles.requestCard}>
+                    filteredEventRequests.map((er, index) => (
+                      <View key={`${er.id || 'event-request'}-${index}`} style={styles.requestCard}>
                         {er.picture ? (
                           <Image source={{ uri: er.picture }} style={styles.announcementCardImage} resizeMode="cover" />
                         ) : null}
@@ -3645,8 +3743,8 @@ export default function RequestScreen() {
                       <ThemedText style={styles.emptyText}>No posted events yet</ThemedText>
                     </View>
                   ) : (
-                    filteredEvents.map((ev) => (
-                      <View key={ev.id} style={styles.requestCard}>
+                    filteredEvents.map((ev, index) => (
+                      <View key={`${ev.id || 'event'}-${index}`} style={styles.requestCard}>
                         {ev.picture ? (
                           <Image source={{ uri: ev.picture }} style={styles.announcementCardImage} resizeMode="cover" />
                         ) : null}
@@ -4094,8 +4192,11 @@ export default function RequestScreen() {
               {(memberSearch.trim() ? members.filter((m) => {
                 const q = memberSearch.trim().toLowerCase();
                 return (m.name || '').toLowerCase().includes(q) || (m.email || '').toLowerCase().includes(q);
-              }) : members).map((member) => (
-                <View key={member.id} style={[styles.requestCard, memberRoleMenuOpen === member.id && styles.memberCardMenuOpen]}>
+              }) : members).map((member, index) => (
+                <View
+                  key={`${member.id || 'member'}-${index}`}
+                  style={[styles.requestCard, memberRoleMenuOpen === member.id && styles.memberCardMenuOpen]}
+                >
                   <View style={styles.requestHeader}>
                     <TouchableOpacity
                       style={styles.memberInfo}
@@ -4131,16 +4232,16 @@ export default function RequestScreen() {
                           onPress={(e) => {
                             e.stopPropagation();
                             // Don't allow role change for self
-                            if (member.id !== user?.id) {
+                            if (member.id !== user?.user_id) {
                               setMemberRoleMenuOpen(memberRoleMenuOpen === member.id ? null : member.id);
                             }
                           }}
-                          activeOpacity={member.id !== user?.id ? 0.7 : 1}>
+                          activeOpacity={member.id !== user?.user_id ? 0.7 : 1}>
                           <ThemedText style={styles.statusText}>
                             {member.role === 'admin' ? 'Admin' : 'Student'}
                           </ThemedText>
                         </TouchableOpacity>
-                        {memberRoleMenuOpen === member.id && member.id !== user?.id && (
+                        {memberRoleMenuOpen === member.id && member.id !== user?.user_id && (
                           <View style={styles.statusMenu}>
                             <TouchableOpacity
                               style={[styles.statusMenuItem, member.role === 'admin' && styles.statusMenuItemActive]}
@@ -4155,7 +4256,7 @@ export default function RequestScreen() {
                           </View>
                         )}
                       </View>
-                      {member.id !== user?.id && (
+                      {member.id !== user?.user_id && (
                         <TouchableOpacity
                           style={styles.deleteIconButton}
                           onPress={(e) => {
@@ -4197,7 +4298,7 @@ export default function RequestScreen() {
                     <ThemedText style={styles.backButton}>←</ThemedText>
                   </TouchableOpacity>
                   <ThemedText style={styles.detailHeaderTitle}>
-                    {selectedMember.id === user?.id ? 'Edit My Profile' : 'Edit Member'}
+                    {selectedMember.id === user?.user_id ? 'Edit My Profile' : 'Edit Member'}
                   </ThemedText>
                   <View style={{ width: 40 }} />
                 </View>
@@ -4257,7 +4358,7 @@ export default function RequestScreen() {
                     {/* Role - editable for other members, read-only for self */}
                     <View style={styles.inputGroup}>
                       <ThemedText style={styles.label}>Role</ThemedText>
-                      {selectedMember.id === user?.id ? (
+                      {selectedMember.id === user?.user_id ? (
                         // Read-only for self
                         <View
                           style={[
@@ -4332,7 +4433,7 @@ export default function RequestScreen() {
                     </TouchableOpacity>
 
                     {/* Remove Member Button - only show for other members */}
-                    {selectedMember.id !== user?.id && (
+                    {selectedMember.id !== user?.user_id && (
                       <TouchableOpacity
                         style={[styles.submitButton, styles.deleteButton, { marginTop: 12 }]}
                         onPress={() => {
@@ -4930,6 +5031,41 @@ const styles = StyleSheet.create({
     height: 200,
     borderRadius: 12,
     marginBottom: 8,
+  },
+  imagePreviewRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  imagePreviewThumbWrap: {
+    marginRight: 10,
+  },
+  imagePreviewThumb: {
+    width: 140,
+    height: 100,
+    borderRadius: 10,
+  },
+  imagePreviewActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  imagePreviewActionButton: {
+    borderWidth: 1,
+    borderColor: '#E8D5C4',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginRight: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  imagePreviewRemoveButton: {
+    borderColor: '#FF6B6B',
+  },
+  imagePreviewActionText: {
+    color: '#5FA8D3',
+    fontSize: 12,
+    fontWeight: '700',
   },
   announcementCardImage: {
     width: '100%',

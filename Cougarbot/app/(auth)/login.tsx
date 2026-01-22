@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Platform,
   ScrollView,
+  RefreshControl,
   Keyboard,
   TouchableWithoutFeedback,
 } from 'react-native';
@@ -25,6 +26,7 @@ export default function LoginScreen() {
   const [universities, setUniversities] = useState<string[]>([]);
   const [showUniversityList, setShowUniversityList] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   const { login } = useAuth();
   const insets = useSafeAreaInsets();
@@ -56,6 +58,12 @@ export default function LoginScreen() {
       // Only use fallback if we're sure it's a network issue
       setUniversities([]);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadUniversities();
+    setRefreshing(false);
   };
 
   const filteredUniversities = universities.filter((uni) =>
@@ -95,6 +103,7 @@ export default function LoginScreen() {
             { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 },
           ]}
           style={styles.scrollView}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           showsVerticalScrollIndicator={true}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
@@ -161,7 +170,7 @@ export default function LoginScreen() {
                   >
                     {filteredUniversities.slice(0, 8).map((item, index) => (
                       <TouchableOpacity
-                        key={item}
+                        key={`${item}-${index}`}
                         style={[
                           styles.dropdownItem,
                           index === filteredUniversities.slice(0, 8).length - 1 &&

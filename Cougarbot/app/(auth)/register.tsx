@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  RefreshControl,
   Keyboard,
   TouchableWithoutFeedback,
 } from 'react-native';
@@ -26,6 +27,7 @@ export default function RegisterScreen() {
   const [universities, setUniversities] = useState<string[]>([]);
   const [showUniversityList, setShowUniversityList] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const { register } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -56,6 +58,12 @@ export default function RegisterScreen() {
       // Only use fallback if we're sure it's a network issue
       setUniversities([]);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadUniversities();
+    setRefreshing(false);
   };
 
   const filteredUniversities = universities.filter((uni) =>
@@ -107,11 +115,12 @@ export default function RegisterScreen() {
             { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 },
           ]}
           style={styles.scrollView}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         bounces
-        alwaysBounceVertical={false}
+        alwaysBounceVertical={true}
       >
         <View style={styles.content}>
           <View style={styles.headerContainer}>

@@ -1,15 +1,29 @@
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 
 export default function MapsScreen() {
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 400);
+  };
+
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.content}>
-        <ThemedText type="title" style={styles.title}>Maps</ThemedText>
-        <ThemedText style={styles.subtitle}>Map integration coming soon</ThemedText>
-      </View>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        alwaysBounceVertical
+        showsVerticalScrollIndicator={false}
+      >
+        <View>
+          <ThemedText type="title" style={styles.title}>Maps</ThemedText>
+          <ThemedText style={styles.subtitle}>Map integration coming soon</ThemedText>
+        </View>
+      </ScrollView>
     </ThemedView>
   );
 }
