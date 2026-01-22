@@ -49,6 +49,21 @@ const SVG_H = PAD_T + CHART_H + PAD_B;
 const CARD_IMAGE_HEIGHT = 240;
 const MAX_LOCATION_NAME_LEN = 200;
 const MAX_QUALITIES = 6;
+const MAX_IMAGE_BYTES = 300_000;
+
+const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
+  if (!asset) return '';
+  if (asset.base64) {
+    const approxBytes = Math.floor((asset.base64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      Alert.alert('Image too large', 'Please choose a smaller image.');
+      return '';
+    }
+    const mimeType = asset.mimeType || 'image/jpeg';
+    return `data:${mimeType};base64,${asset.base64}`;
+  }
+  return asset.uri;
+};
 
 interface LocationPicture {
   url: string;
@@ -718,12 +733,34 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-  const buildPicturesFromUris = (uris: string[], caption?: string) => {
+  const buildPicturesFromUris = async (uris: string[], caption?: string) => {
     if (!uris.length) return undefined;
-    // Just pass URIs directly - backend will handle them
-    const pictures = uris
-      .filter((uri) => uri && !uri.startsWith('ph://'))
-      .map((uri) => ({ url: uri, caption }));
+    let hadInvalid = false;
+    const pictures: Array<{ url: string; caption?: string }> = [];
+    for (const uri of uris) {
+      if (!uri || uri.startsWith('ph://') || uri.startsWith('file://')) {
+        hadInvalid = true;
+        continue;
+      }
+      if (uri.startsWith('data:')) {
+        try {
+          const uploaded = await apiService.uploadBase64Image(uri);
+          pictures.push({ url: uploaded, caption });
+        } catch {
+          hadInvalid = true;
+        }
+        continue;
+      }
+      if (uri.startsWith('http://') || uri.startsWith('https://')) {
+        pictures.push({ url: uri, caption });
+        continue;
+      }
+      hadInvalid = true;
+    }
+
+    if (hadInvalid) {
+      Alert.alert('Image skipped', 'Some images were too large or unsupported.');
+    }
     return pictures.length > 0 ? pictures : undefined;
   };
 
@@ -797,16 +834,19 @@ const countQualities = (text?: string) => {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
-        allowsMultipleSelection: true,
-        selectionLimit: 8,
+        allowsMultipleSelection: false,
+        selectionLimit: 1,
         aspect: [4, 3],
-        quality: 0.5,
+        quality: 0.3,
+        base64: true,
       });
       if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets.map((asset) => asset.uri);
+        const selectedUris = result.assets
+          .map((asset) => getPickerAssetUri(asset))
+          .filter(Boolean);
         setRequestLocationImages((prev) => {
           const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-          return next.slice(0, 8);
+          return next.slice(0, 1);
         });
       }
     } catch (error) {
@@ -826,7 +866,7 @@ const countQualities = (text?: string) => {
     }
     setRequestLocationSubmitting(true);
     try {
-      const pictures = buildPicturesFromUris(
+      const pictures = await buildPicturesFromUris(
         requestLocationImages,
         requestLocationTopQualities.trim() || undefined
       );
@@ -990,7 +1030,6 @@ const countQualities = (text?: string) => {
                     )}
                   </View>
                 </View>
-
                 {item.level_of_business ? (
                   <View style={styles.cardBusinessBlock}>
                     <ThemedText style={styles.cardBusinessLabel}>Activity Level: </ThemedText>
@@ -1009,14 +1048,7 @@ const countQualities = (text?: string) => {
                 {/* Address */}
                 <ThemedText style={styles.address}>{item.address}</ThemedText>
 
-                {/* Description */}
-                {item.most_known_for && !qualities.length && (
-                  <ThemedText style={styles.description} numberOfLines={2}>
-                    {item.most_known_for}
-                  </ThemedText>
-                )}
-
-                {/* Qualities as boxes */}
+                {/* Top qualities only */}
                 {qualities.length > 0 && (
                   <View style={styles.qualitiesContainer}>
                     {qualities.map((quality, index) => (
@@ -1220,75 +1252,6 @@ const countQualities = (text?: string) => {
         </View>
       </Modal>
 
-      {/* Review Modal */}
-      <Modal
-        visible={showReviewModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowReviewModal(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalOverlay}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.modalOverlay}>
-              <View style={styles.reviewModalContent} {...reviewSwipeResponder.panHandlers}>
-                <View style={styles.modalHeader}>
-                  <ThemedText style={styles.modalTitle}>Leave a Review</ThemedText>
-                  <TouchableOpacity onPress={() => setShowReviewModal(false)}>
-                    <ThemedText style={styles.modalClose}>✕</ThemedText>
-                  </TouchableOpacity>
-                </View>
-
-                {selectedLocation && (
-                  <ThemedText style={styles.modalLocationName}>{selectedLocation.name}</ThemedText>
-                )}
-
-                <View style={styles.ratingSelector}>
-                  <ThemedText style={styles.ratingLabel}>Rating:</ThemedText>
-                  <View style={styles.starContainer}>
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <TouchableOpacity
-                        key={star}
-                        onPress={() => setReviewRating(star)}
-                        style={styles.starButton}>
-                        <ThemedText
-                          style={[
-                            styles.star,
-                            reviewRating > 0 && star <= reviewRating && styles.starActive,
-                          ]}>
-                          ★
-                        </ThemedText>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-
-                <ThemedText style={styles.reviewTextLabel}>Your Review:</ThemedText>
-                <TextInput
-                  style={styles.reviewTextInput}
-                  placeholder="Share your experience..."
-                  placeholderTextColor="#888888"
-                  value={reviewText}
-                  onChangeText={setReviewText}
-                  multiline
-                  numberOfLines={6}
-                  returnKeyType="done"
-                  blurOnSubmit={true}
-                />
-
-                <TouchableOpacity 
-                  style={[styles.submitReviewButton, reviewRating === 0 && styles.submitReviewButtonDisabled]} 
-                  onPress={handleSubmitReview}
-                  disabled={reviewRating === 0}>
-                  <ThemedText style={styles.submitReviewButtonText}>Submit Review</ThemedText>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </TouchableWithoutFeedback>
-        </KeyboardAvoidingView>
-      </Modal>
-
       {/* Instagram-style Detail Modal */}
       <Modal
         visible={showDetailModal}
@@ -1330,6 +1293,16 @@ const countQualities = (text?: string) => {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag">
+              <View style={styles.detailNameRow}>
+                <ThemedText style={styles.detailName}>{selectedLocation.name}</ThemedText>
+                <View style={styles.detailRatingRow}>
+                  <ThemedText style={styles.detailRatingIcon}>★</ThemedText>
+                  <ThemedText style={styles.detailRatingText}>
+                    {selectedLocation.rating?.toFixed(1) || '0.0'}
+                  </ThemedText>
+                </View>
+              </View>
+
               {renderLocationImages(
                 selectedLocation.pictures,
                 styles.detailImage,
@@ -1342,16 +1315,6 @@ const countQualities = (text?: string) => {
               ) : null}
 
               <View style={styles.detailInfo}>
-                <View style={styles.detailNameRow}>
-                  <ThemedText style={styles.detailName}>{selectedLocation.name}</ThemedText>
-                  <View style={styles.detailRatingRow}>
-                    <ThemedText style={styles.detailRatingIcon}>★</ThemedText>
-                    <ThemedText style={styles.detailRatingText}>
-                      {selectedLocation.rating?.toFixed(1) || '0.0'}
-                    </ThemedText>
-                  </View>
-                </View>
-
                 {selectedLocation.level_of_business ? (
                   <View style={styles.detailBusinessBlock}>
                     <ThemedText style={styles.detailBusinessLabel}>Level of business:</ThemedText>
@@ -1434,10 +1397,7 @@ const countQualities = (text?: string) => {
                 <View style={styles.detailActions}>
                   <TouchableOpacity
                     style={styles.detailActionButton}
-                    onPress={() => {
-                      setShowDetailModal(false);
-                      openReviewModal(selectedLocation);
-                    }}>
+                    onPress={() => openReviewModal(selectedLocation)}>
                     <ThemedText style={styles.detailActionText}>✍️ Leave Review</ThemedText>
                   </TouchableOpacity>
                 </View>
@@ -1529,8 +1489,80 @@ const countQualities = (text?: string) => {
                 </TouchableOpacity>
               </View>
             </ScrollView>
+
           </View>
         )}
+      </Modal>
+
+      {/* Review Modal */}
+      <Modal
+        visible={showReviewModal}
+        animationType="slide"
+        transparent={true}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        onRequestClose={() => setShowReviewModal(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.reviewModalContent} {...reviewSwipeResponder.panHandlers}>
+                <View style={styles.modalHeader}>
+                  <ThemedText style={styles.modalTitle}>Leave a Review</ThemedText>
+                  <TouchableOpacity onPress={() => setShowReviewModal(false)}>
+                    <ThemedText style={styles.modalClose}>✕</ThemedText>
+                  </TouchableOpacity>
+                </View>
+
+                {selectedLocation && (
+                  <ThemedText style={styles.modalLocationName}>{selectedLocation.name}</ThemedText>
+                )}
+
+                <View style={styles.ratingSelector}>
+                  <ThemedText style={styles.ratingLabel}>Rating:</ThemedText>
+                  <View style={styles.starContainer}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <TouchableOpacity
+                        key={star}
+                        onPress={() => setReviewRating(star)}
+                        style={styles.starButton}>
+                        <ThemedText
+                          style={[
+                            styles.star,
+                            reviewRating > 0 && star <= reviewRating && styles.starActive,
+                          ]}>
+                          ★
+                        </ThemedText>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <ThemedText style={styles.reviewTextLabel}>Your Review:</ThemedText>
+                <TextInput
+                  style={styles.reviewTextInput}
+                  placeholder="Share your experience..."
+                  placeholderTextColor="#888888"
+                  value={reviewText}
+                  onChangeText={setReviewText}
+                  multiline
+                  numberOfLines={6}
+                  returnKeyType="done"
+                  blurOnSubmit={true}
+                />
+
+                <TouchableOpacity
+                  style={[styles.submitReviewButton, reviewRating === 0 && styles.submitReviewButtonDisabled]}
+                  onPress={handleSubmitReview}
+                  disabled={reviewRating === 0}>
+                  <ThemedText style={styles.submitReviewButtonText}>Submit Review</ThemedText>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Reviews List Modal */}
@@ -2065,7 +2097,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   detailContent: {
-    paddingBottom: 40,
+    paddingBottom: 48,
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
   detailImage: {
     width: '100%',
@@ -2078,7 +2112,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   detailInfo: {
-    padding: 20,
+    padding: 24,
     borderBottomWidth: 1,
     borderBottomColor: '#E8D5C4',
   },

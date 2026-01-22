@@ -1,58 +1,172 @@
-# Welcome to your Expo app 👋
+# Cougarbot App Overview
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This repo contains a React Native (Expo) mobile app and a FastAPI backend. The app is in `Cougarbot/` and the backend is in `backend/`.
 
-## Get started
+## Project Structure
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-## API base URL (external access)
-
-Set `EXPO_PUBLIC_API_BASE_URL` to point the app at a hosted backend:
-
-```bash
-EXPO_PUBLIC_API_BASE_URL=https://your-api-domain.com
+```
+cougar-bot/
+  backend/                 # FastAPI backend
+  Cougarbot/               # Expo/React Native app
 ```
 
-In the output, you'll find options to open the app in a
+### Backend (`backend/`)
+- `backend/main.py`  
+  FastAPI app entrypoint. This wires the routers and runs the API.
+- `backend/app/db.py`  
+  SQLAlchemy metadata, table definitions, and DB connection utilities.
+  - SQLite by default (`sqlite:///./app.db`)
+  - Use `DATABASE_URL` to point to hosted Postgres (Render/Supabase).
+- `backend/app/routers/`  
+  Each file maps to a feature area:
+  - `auth.py` — login/refresh/register
+  - `orgs.py` — org registration + org profile updates
+  - `users.py` — user profile, roles, deletion
+  - `locations.py` — locations CRUD + activity ratings
+  - `location_requests.py` — student location requests
+  - `reviews.py` — location reviews
+  - `favorites.py` — user favorites
+  - `announcements.py` — announcements CRUD + publish/unpublish
+  - `announcement_requests.py` — student announcement requests
+  - `events.py` — events CRUD
+  - `event_requests.py` — student event requests
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### Mobile App (`Cougarbot/`)
+- `app/`  
+  Expo Router screens:
+  - `(auth)/` — login/register flows
+  - `(tabs)/` — main tabs: home, places, request/admin, profile, maps
+- `services/api.ts`  
+  Axios wrapper and all API calls.
+- `contexts/AuthContext.tsx`  
+  Auth state, tokens, login/logout.
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## Database
 
-## Get a fresh project
+Schema is defined in `backend/app/db.py`. Key tables:
+- `organizations`, `org_domains`
+- `users`, `refresh_tokens`
+- `locations`, `location_requests`
+- `reviews`, `favorites`, `location_activity_ratings`
+- `announcements`, `announcement_requests`, `announcement_comments`
+- `events`, `event_requests`
 
-When you're ready, run:
+### Database Location
+- Local dev: SQLite at `backend/app.db`
+- Hosted: set `DATABASE_URL` in `.env` or Render env vars.
 
-```bash
-npm run reset-project
+## API Endpoints (High Level)
+
+### Auth
+- `POST /auth/login`
+- `POST /auth/register`
+- `POST /auth/refresh`
+
+### Orgs
+- `POST /orgs/register`
+- `GET /orgs`
+- `GET /orgs/me`
+- `PATCH /orgs/me`
+
+### Locations
+- `GET /locations`
+- `POST /locations`
+- `PUT /locations/{id}`
+- `DELETE /locations/{id}`
+- `GET /locations/{id}/activity-ratings`
+- `POST /locations/{id}/activity-ratings`
+
+### Location Requests (students)
+- `GET /location-requests`
+- `POST /location-requests`
+- `PUT /location-requests/{id}`
+- `PUT /location-requests/{id}/approve`
+- `PUT /location-requests/{id}/deny`
+- `DELETE /location-requests/{id}`
+
+### Reviews
+- `GET /reviews/locations/{id}`
+- `POST /reviews/locations/{id}`
+- `PUT /reviews/{id}`
+- `DELETE /reviews/{id}`
+
+### Favorites
+- `GET /favorites`
+- `POST /favorites/{locationId}`
+- `DELETE /favorites/{locationId}`
+
+### Announcements
+- `GET /announcements`
+- `POST /announcements`
+- `PATCH /announcements/{id}`
+- `POST /announcements/{id}/publish`
+- `POST /announcements/{id}/unpublish`
+- `DELETE /announcements/{id}`
+- `GET /announcements/{id}/comments`
+- `POST /announcements/{id}/comments`
+- `DELETE /announcements/{id}/comments/{commentId}`
+
+### Announcement Requests (students)
+- `GET /announcement-requests`
+- `POST /announcement-requests`
+- `POST /announcement-requests/{id}/approve`
+- `POST /announcement-requests/{id}/deny`
+- `DELETE /announcement-requests/{id}`
+
+### Events
+- `GET /events`
+- `POST /events`
+- `PATCH /events/{id}`
+- `DELETE /events/{id}`
+
+### Event Requests (students)
+- `GET /event-requests`
+- `POST /event-requests`
+- `PUT /event-requests/{id}`
+- `POST /event-requests/{id}/approve`
+- `POST /event-requests/{id}/deny`
+- `DELETE /event-requests/{id}`
+
+## App Flow (High Level)
+
+- Users register or login via `(auth)` screens.
+- Auth tokens are stored in `AsyncStorage`.
+- The API base URL comes from:
+  - `EXPO_PUBLIC_API_BASE_URL` if set
+  - otherwise, it falls back to local LAN IP in `services/api.ts`
+- Tabs:
+  - **Home** (`(tabs)/index.tsx`) — announcements, events, place highlights
+  - **Places** (`(tabs)/places.tsx`) — browse locations, reviews, favorites
+  - **Request/Admin** (`(tabs)/request.tsx`) — admin tooling + student request forms
+  - **Profile** (`(tabs)/profile.tsx`) — user profile and settings
+
+## Environment Variables
+
+Backend:
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `REFRESH_TOKEN_PEPPER`
+
+Frontend:
+- `EXPO_PUBLIC_API_BASE_URL`
+
+## Running Locally
+
+Backend:
+```
+cd backend
+pip install -r requirements.txt
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Frontend:
+```
+cd Cougarbot
+npm install
+npx expo start
+```
 
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Notes on Images
+- Images are sent as URLs or base64 data URLs.
+- Some student flows use base64 for reliability on iOS.
+- Very large images are rejected client-side to avoid crashes.

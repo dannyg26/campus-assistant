@@ -140,6 +140,15 @@ class ApiService {
     return response.data;
   }
 
+  async uploadBase64Image(dataUrl: string): Promise<string> {
+    const response = await this.api.post('/uploads/base64', { data_url: dataUrl });
+    const url = response.data?.url;
+    if (!url) {
+      throw new Error('Upload failed: missing URL');
+    }
+    return url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+  }
+
   async updateOrgName(name: string) {
     const response = await this.api.patch('/orgs/me', { name: name.trim() });
     return response.data;

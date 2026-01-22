@@ -49,7 +49,7 @@ const DOT_FILL = '#2E7BA6';
 const DOT_GLOW_FILL = '#2E7BA638';
 const SVG_W = PAD_L + CHART_W + PAD_R;
 const SVG_H = PAD_T + CHART_H + PAD_B;
-const MAX_IMAGE_BYTES = 800_000;
+const MAX_IMAGE_BYTES = 300_000;
 
 const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
   if (!asset) return '';
@@ -63,6 +63,21 @@ const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
     return `data:${mimeType};base64,${asset.base64}`;
   }
   return asset.uri;
+};
+
+const uploadImageIfNeeded = async (image: string | null | undefined) => {
+  if (!image) return undefined;
+  if (image.startsWith('data:')) {
+    return await apiService.uploadBase64Image(image);
+  }
+  if (image.startsWith('http://') || image.startsWith('https://')) {
+    return image;
+  }
+  if (image.startsWith('ph://') || image.startsWith('file://')) {
+    Alert.alert('Image not ready', 'Please reselect the image.');
+    return undefined;
+  }
+  return image;
 };
 
 type TabType = 'foryou' | 'events' | 'announcements';
@@ -531,7 +546,7 @@ export default function HomeScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -552,7 +567,7 @@ export default function HomeScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -639,15 +654,17 @@ export default function HomeScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
       try {
         const imageUri = getPickerAssetUri(result.assets[0]);
         if (!imageUri) return;
-        await apiService.updateOrgProfilePic(imageUri);
-        setOrgProfilePic(imageUri);
+        const uploadedUrl = await uploadImageIfNeeded(imageUri);
+        if (!uploadedUrl) return;
+        await apiService.updateOrgProfilePic(uploadedUrl);
+        setOrgProfilePic(uploadedUrl);
       } catch (e: any) {
         Alert.alert('Error', e?.response?.data?.detail || 'Failed to update org picture');
       }
@@ -1308,6 +1325,7 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                 </View>
               </ScrollView>
+
             </View>
           )}
         </Modal>
@@ -1393,10 +1411,11 @@ export default function HomeScreen() {
                 onPress={async () => {
                   setRequestAnnouncementSubmitting(true);
                   try {
+                    const image = await uploadImageIfNeeded(requestAnnouncementImage);
                     await apiService.createAnnouncementRequest({
                       title: requestAnnouncementTitle.trim(),
                       body: requestAnnouncementBody.trim(),
-                      image: requestAnnouncementImage || undefined,
+                      image,
                     });
                     Alert.alert('Submitted', 'Your request was sent. An admin will review it.');
                     setShowRequestAnnouncementModal(false);
@@ -1526,13 +1545,14 @@ export default function HomeScreen() {
                   }
                   setRequestEventSubmitting(true);
                   try {
+                    const image = await uploadImageIfNeeded(requestEventImage);
                     await apiService.createEventRequest({
                       event_name: requestEventName.trim(),
                       location: requestEventLocation.trim() || undefined,
                       meeting_time: requestEventMeetingTime.trim() || undefined,
                       description: requestEventDescription.trim() || undefined,
                       top_qualities: requestEventTopQualities.trim() || undefined,
-                      picture: requestEventImage || undefined,
+                      picture: image,
                     });
                     Alert.alert('Submitted', 'Your event request was sent. An admin will review it.');
                     setShowRequestEventModal(false);
@@ -1605,6 +1625,7 @@ export default function HomeScreen() {
                   </View>
                 )}
               </ScrollView>
+
             </View>
           )}
         </Modal>
@@ -1775,62 +1796,58 @@ export default function HomeScreen() {
                   )}
                 </View>
               </ScrollView>
+
+              {showPlaceReviewModal && (
+                <View style={styles.placeReviewModalOverlay}>
+                  <View style={styles.placeReviewModalContent} {...placeReviewSwipeResponder.panHandlers}>
+                    <View style={styles.placeReviewModalHeader}>
+                      <ThemedText style={styles.placeReviewModalTitle}>Leave a Review</ThemedText>
+                      <TouchableOpacity onPress={() => setShowPlaceReviewModal(false)}>
+                        <ThemedText style={styles.placeReviewModalClose}>✕</ThemedText>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.placeReviewStars}>
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <TouchableOpacity key={star} onPress={() => setPlaceReviewRating(star)}>
+                          <ThemedText
+                            style={[
+                              styles.placeReviewStarLarge,
+                              placeReviewRating >= star && styles.placeReviewStarLargeActive,
+                            ]}>
+                            ★
+                          </ThemedText>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <TextInput
+                      style={styles.placeReviewInput}
+                      placeholder="Share your experience..."
+                      placeholderTextColor="#888888"
+                      value={placeReviewText}
+                      onChangeText={setPlaceReviewText}
+                      multiline
+                      numberOfLines={5}
+                    />
+
+                    <TouchableOpacity
+                      style={[
+                        styles.placeReviewSubmitButton,
+                        placeReviewRating === 0 && { opacity: 0.6 },
+                      ]}
+                      onPress={submitPlaceReview}
+                      disabled={placeReviewRating === 0}
+                      activeOpacity={0.7}>
+                      <ThemedText style={styles.placeReviewSubmitText}>Submit Review</ThemedText>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
             </View>
           )}
         </Modal>
 
-        {/* Place Review Modal */}
-        <Modal
-          visible={showPlaceReviewModal}
-          animationType="slide"
-          transparent={true}
-          onRequestClose={() => setShowPlaceReviewModal(false)}>
-          <View style={styles.placeReviewModalOverlay}>
-            <View style={styles.placeReviewModalContent} {...placeReviewSwipeResponder.panHandlers}>
-              <View style={styles.placeReviewModalHeader}>
-                <ThemedText style={styles.placeReviewModalTitle}>Leave a Review</ThemedText>
-                <TouchableOpacity onPress={() => setShowPlaceReviewModal(false)}>
-                  <ThemedText style={styles.placeReviewModalClose}>✕</ThemedText>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.placeReviewStars}>
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <TouchableOpacity key={star} onPress={() => setPlaceReviewRating(star)}>
-                    <ThemedText
-                      style={[
-                        styles.placeReviewStarLarge,
-                        placeReviewRating >= star && styles.placeReviewStarLargeActive,
-                      ]}>
-                      ★
-                    </ThemedText>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <TextInput
-                style={styles.placeReviewInput}
-                placeholder="Share your experience..."
-                placeholderTextColor="#888888"
-                value={placeReviewText}
-                onChangeText={setPlaceReviewText}
-                multiline
-                numberOfLines={5}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.placeReviewSubmitButton,
-                  placeReviewRating === 0 && { opacity: 0.6 },
-                ]}
-                onPress={submitPlaceReview}
-                disabled={placeReviewRating === 0}
-                activeOpacity={0.7}>
-                <ThemedText style={styles.placeReviewSubmitText}>Submit Review</ThemedText>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
       </ThemedView>
     </TouchableWithoutFeedback>
   );
@@ -2508,6 +2525,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center',
     padding: 16,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 20,
+    elevation: 20,
   },
   placeReviewModalContent: {
     backgroundColor: '#FFFFFF',

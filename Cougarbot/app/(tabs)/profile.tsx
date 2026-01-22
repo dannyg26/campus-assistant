@@ -23,7 +23,7 @@ import { useRouter } from 'expo-router';
 import { apiService } from '@/services/api';
 
 export default function ProfileScreen() {
-  const MAX_IMAGE_BYTES = 800_000;
+  const MAX_IMAGE_BYTES = 300_000;
   const { logout, user, login, refreshUser } = useAuth();
   const router = useRouter();
   const [showEditName, setShowEditName] = useState(false);
@@ -45,6 +45,18 @@ export default function ProfileScreen() {
       return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
     }
     return asset.uri;
+  };
+
+  const uploadImageIfNeeded = async (image: string | null) => {
+    if (!image) return undefined;
+    if (image.startsWith('data:')) {
+      return await apiService.uploadBase64Image(image);
+    }
+    if (image.startsWith('http://') || image.startsWith('https://')) {
+      return image;
+    }
+    Alert.alert('Image not ready', 'Please reselect the image.');
+    return undefined;
   };
 
   const handleLogout = async () => {
@@ -105,7 +117,7 @@ export default function ProfileScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
 
@@ -125,13 +137,18 @@ export default function ProfileScreen() {
 
     setLoading(true);
     try {
-      await apiService.updateProfile({ profile_pic: selectedImage });
+      const uploaded = await uploadImageIfNeeded(selectedImage);
+      if (!uploaded) {
+        setLoading(false);
+        return;
+      }
+      await apiService.updateProfile({ profile_pic: uploaded });
       Alert.alert('Success', 'Profile picture updated successfully');
       setShowEditProfilePic(false);
       setSelectedImage(null);
       // Refresh user data
       if (user) {
-        user.profile_pic = selectedImage;
+        user.profile_pic = uploaded;
       }
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Failed to update profile picture');

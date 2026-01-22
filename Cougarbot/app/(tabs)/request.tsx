@@ -29,7 +29,7 @@ const MAX_LOCATION_NAME_LEN = 200;
 const MAX_EVENT_NAME_LEN = 500;
 const MAX_ANNOUNCEMENT_TITLE_LEN = 500;
 const MAX_QUALITIES = 6;
-const MAX_IMAGE_BYTES = 800_000;
+const MAX_IMAGE_BYTES = 300_000;
 
 const countQualities = (text?: string) => {
   if (!text) return 0;
@@ -39,12 +39,33 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-const buildPicturesFromUris = (uris: string[], caption?: string) => {
+const buildPicturesFromUris = async (uris: string[], caption?: string) => {
   if (!uris.length) return undefined;
-  // Just pass URIs directly - backend will handle them
-  const pictures = uris
-    .filter((uri) => uri && !uri.startsWith('ph://')) // Skip iOS ph:// URIs
-    .map((uri) => ({ url: uri, caption }));
+  const pictures: Array<{ url: string; caption?: string }> = [];
+  let hadInvalid = false;
+  for (const uri of uris) {
+    if (!uri || uri.startsWith('ph://') || uri.startsWith('file://')) {
+      hadInvalid = true;
+      continue;
+    }
+    if (uri.startsWith('data:')) {
+      try {
+        const uploaded = await apiService.uploadBase64Image(uri);
+        pictures.push({ url: uploaded, caption });
+      } catch {
+        hadInvalid = true;
+      }
+      continue;
+    }
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      pictures.push({ url: uri, caption });
+      continue;
+    }
+    hadInvalid = true;
+  }
+  if (hadInvalid) {
+    Alert.alert('Image skipped', 'Some images were too large or unsupported.');
+  }
   return pictures.length > 0 ? pictures : undefined;
 };
 
@@ -62,19 +83,17 @@ const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
   return asset.uri;
 };
 
-const getSafeUploadImage = (image: string | null | undefined) => {
+const uploadImageIfNeeded = async (image: string | null | undefined) => {
   if (!image) return undefined;
-  if (image.startsWith('ph://') || image.startsWith('file://')) {
-    Alert.alert('Image not supported', 'Please reselect the image.');
-    return undefined;
-  }
   if (image.startsWith('data:')) {
-    const base64 = image.split(',')[1] || '';
-    const approxBytes = Math.floor((base64.length * 3) / 4);
-    if (approxBytes > MAX_IMAGE_BYTES) {
-      Alert.alert('Image too large', 'Please choose a smaller image.');
-      return undefined;
-    }
+    return await apiService.uploadBase64Image(image);
+  }
+  if (image.startsWith('http://') || image.startsWith('https://')) {
+    return image;
+  }
+  if (image.startsWith('ph://') || image.startsWith('file://')) {
+    Alert.alert('Image not ready', 'Please reselect the image.');
+    return undefined;
   }
   return image;
 };
@@ -415,11 +434,14 @@ export default function RequestScreen() {
         allowsMultipleSelection: true,
         selectionLimit: 8,
         aspect: [4, 3],
-        quality: 0.5,
+        quality: 0.3,
+        base64: true,
       });
 
       if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets.map((asset) => asset.uri);
+        const selectedUris = result.assets
+          .map((asset) => getPickerAssetUri(asset))
+          .filter(Boolean);
         setEditLocationSelectedImages((prev) => {
           const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
           return next.slice(0, 8);
@@ -445,7 +467,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      const pictures = buildPicturesFromUris(
+      const pictures = await buildPicturesFromUris(
         editLocationSelectedImages,
         editLocationTopQualities.trim() || undefined
       );
@@ -483,11 +505,14 @@ export default function RequestScreen() {
         allowsMultipleSelection: true,
         selectionLimit: 8,
         aspect: [4, 3],
-        quality: 0.5,
+        quality: 0.3,
+        base64: true,
       });
 
       if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets.map((asset) => asset.uri);
+        const selectedUris = result.assets
+          .map((asset) => getPickerAssetUri(asset))
+          .filter(Boolean);
         setNewLocationSelectedImages((prev) => {
           const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
           return next.slice(0, 8);
@@ -511,7 +536,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      const pictures = buildPicturesFromUris(
+      const pictures = await buildPicturesFromUris(
         newLocationSelectedImages,
         newLocationTopQualities.trim() || undefined
       );
@@ -607,7 +632,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -629,13 +654,14 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
+      const image = await uploadImageIfNeeded(newEventImage);
       await apiService.createEvent({
         event_name: newEventName.trim(),
         location: newEventLocation.trim() || undefined,
         top_qualities: newEventTopQualities.trim() || undefined,
         description: newEventDescription.trim() || undefined,
         meeting_time: newEventMeetingTime.trim() || undefined,
-        picture: newEventImage || undefined,
+        picture: image,
       });
       Alert.alert('Success', 'Event created');
       setNewEventName('');
@@ -675,7 +701,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -698,13 +724,14 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
+      const image = await uploadImageIfNeeded(editEventImage);
       await apiService.updateEventRequest(selectedEventRequest.id, {
         event_name: editEventName.trim(),
         location: editEventLocation.trim() || undefined,
         top_qualities: editEventTopQualities.trim() || undefined,
         description: editEventDescription.trim() || undefined,
         meeting_time: editEventMeetingTime.trim() || undefined,
-        picture: editEventImage || undefined,
+        picture: image,
         admin_notes: editEventAdminNotes.trim() || undefined,
       });
       Alert.alert('Success', 'Event request updated');
@@ -787,7 +814,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -810,13 +837,14 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
+      const image = await uploadImageIfNeeded(editPostedEventImage);
       await apiService.patchEvent(selectedPostedEvent.id, {
         event_name: editPostedEventName.trim(),
         location: editPostedEventLocation.trim() || undefined,
         top_qualities: editPostedEventTopQualities.trim() || undefined,
         description: editPostedEventDescription.trim() || undefined,
         meeting_time: editPostedEventMeetingTime.trim() || undefined,
-        picture: editPostedEventImage || undefined,
+        picture: image,
       });
       Alert.alert('Success', 'Event updated');
       loadEvents();
@@ -918,7 +946,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
 
@@ -940,7 +968,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -982,7 +1010,7 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -1003,9 +1031,10 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
+      const uploaded = await uploadImageIfNeeded(editMemberProfilePic);
       await apiService.updateUserProfile(selectedMember.id, {
         name: editMemberName.trim(),
-        profile_pic: editMemberProfilePic || undefined,
+        profile_pic: uploaded || undefined,
       });
 
       if (editMemberRole && editMemberRole !== selectedMember.role) {
@@ -1066,14 +1095,10 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
-      base64: true,
+      quality: 0.4,
     });
     if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setStudentAnnouncementImage(imageUri);
-      }
+      setStudentAnnouncementImage(result.assets[0].uri);
     }
   };
 
@@ -1087,14 +1112,10 @@ export default function RequestScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
-      base64: true,
+      quality: 0.4,
     });
     if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setStudentEventImage(imageUri);
-      }
+      setStudentEventImage(result.assets[0].uri);
     }
   };
 
@@ -1146,7 +1167,7 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      const image = getSafeUploadImage(studentAnnouncementImage);
+      const image = await uploadImageIfNeeded(studentAnnouncementImage);
       await apiService.createAnnouncementRequest({
         title: studentAnnouncementTitle.trim(),
         body: studentAnnouncementBody.trim(),
@@ -1175,13 +1196,14 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
+      const image = await uploadImageIfNeeded(studentEventImage);
       await apiService.createEventRequest({
         event_name: studentEventName.trim(),
         location: studentEventLocation.trim() || undefined,
         top_qualities: studentEventTopQualities.trim() || undefined,
         description: studentEventDescription.trim() || undefined,
         meeting_time: studentEventMeetingTime.trim() || undefined,
-        picture: studentEventImage || undefined,
+        picture: image,
       });
       Alert.alert('Submitted', 'Your event request was sent.');
       setStudentEventName('');
@@ -2189,7 +2211,8 @@ export default function RequestScreen() {
                     setLoading(true);
                     try {
                       await apiService.updateOrgName(orgNameForSettings.trim());
-                      await apiService.updateOrgProfilePic(orgProfilePicForSettings);
+                      const uploaded = await uploadImageIfNeeded(orgProfilePicForSettings);
+                      await apiService.updateOrgProfilePic(uploaded || null);
                       Alert.alert('Success', 'Organization updated');
                       setShowOrgSettingsModal(false);
                     } catch (e: any) {
@@ -3388,7 +3411,7 @@ export default function RequestScreen() {
                     onPress={async () => {
                       setLoading(true);
                       try {
-                        const image = getSafeUploadImage(newAnnouncementImage);
+                        const image = await uploadImageIfNeeded(newAnnouncementImage);
                         await apiService.createAnnouncement({
                           title: newAnnouncementTitle.trim(),
                           body: newAnnouncementBody.trim(),
@@ -3477,7 +3500,7 @@ export default function RequestScreen() {
                       onPress={async () => {
                         setLoading(true);
                         try {
-                          const image = getSafeUploadImage(editAnnouncementImage);
+                          const image = await uploadImageIfNeeded(editAnnouncementImage);
                           await apiService.patchAnnouncement(selectedAnnouncement.id, {
                             title: editAnnouncementTitle.trim(),
                             body: editAnnouncementBody.trim(),

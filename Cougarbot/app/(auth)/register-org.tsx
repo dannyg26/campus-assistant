@@ -20,7 +20,7 @@ import { router } from 'expo-router';
 import { apiService } from '@/services/api';
 
 export default function RegisterOrgScreen() {
-  const MAX_IMAGE_BYTES = 800_000;
+  const MAX_IMAGE_BYTES = 300_000;
   const [orgName, setOrgName] = useState('');
   const [orgDomains, setOrgDomains] = useState('');
   const [orgImage, setOrgImage] = useState<string | null>(null);
@@ -47,6 +47,18 @@ export default function RegisterOrgScreen() {
     return asset.uri;
   };
 
+  const uploadImageIfNeeded = async (image: string | null) => {
+    if (!image) return undefined;
+    if (image.startsWith('data:')) {
+      return await apiService.uploadBase64Image(image);
+    }
+    if (image.startsWith('http://') || image.startsWith('https://')) {
+      return image;
+    }
+    Alert.alert('Image not ready', 'Please reselect the image.');
+    return undefined;
+  };
+
   const pickOrgImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -57,7 +69,7 @@ export default function RegisterOrgScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.6,
+      quality: 0.3,
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
@@ -89,10 +101,12 @@ export default function RegisterOrgScreen() {
         .map((d) => d.trim().toLowerCase())
         .filter(Boolean);
 
+      const uploadedLogo = await uploadImageIfNeeded(orgImage);
+
       const response = await apiService.registerOrganization({
         org_name: orgName.trim(),
         allowed_email_domains: domains.length ? domains : undefined,
-        org_profile_pic: orgImage || undefined,
+        org_profile_pic: uploadedLogo,
         admin_name: adminName.trim(),
         admin_email: adminEmail.trim().toLowerCase(),
         admin_password: adminPassword,
