@@ -25,8 +25,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 
-const MAX_NAME_LEN = 40;
-const MAX_ANNOUNCEMENT_TITLE_LEN = 100;
+const MAX_LOCATION_NAME_LEN = 200;
+const MAX_EVENT_NAME_LEN = 500;
+const MAX_ANNOUNCEMENT_TITLE_LEN = 500;
 const MAX_QUALITIES = 6;
 const MAX_IMAGE_BYTES = 800_000;
 
@@ -59,6 +60,23 @@ const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
     return `data:${mimeType};base64,${asset.base64}`;
   }
   return asset.uri;
+};
+
+const getSafeUploadImage = (image: string | null | undefined) => {
+  if (!image) return undefined;
+  if (image.startsWith('ph://') || image.startsWith('file://')) {
+    Alert.alert('Image not supported', 'Please reselect the image.');
+    return undefined;
+  }
+  if (image.startsWith('data:')) {
+    const base64 = image.split(',')[1] || '';
+    const approxBytes = Math.floor((base64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      Alert.alert('Image too large', 'Please choose a smaller image.');
+      return undefined;
+    }
+  }
+  return image;
 };
 
 const moveImage = (list: string[], index: number, direction: 'left' | 'right') => {
@@ -1128,10 +1146,11 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
+      const image = getSafeUploadImage(studentAnnouncementImage);
       await apiService.createAnnouncementRequest({
         title: studentAnnouncementTitle.trim(),
         body: studentAnnouncementBody.trim(),
-        image: studentAnnouncementImage || undefined,
+        image,
       });
       Alert.alert('Submitted', 'Your announcement request was sent.');
       setStudentAnnouncementTitle('');
@@ -1856,7 +1875,7 @@ export default function RequestScreen() {
                   placeholderTextColor="#888888"
                   value={studentEventName}
                   onChangeText={setStudentEventName}
-                  maxLength={MAX_NAME_LEN}
+                  maxLength={MAX_EVENT_NAME_LEN}
                 />
               </View>
               <View style={styles.inputGroup}>
@@ -2001,7 +2020,7 @@ export default function RequestScreen() {
                   placeholderTextColor="#888888"
                   value={studentAnnouncementTitle}
                   onChangeText={setStudentAnnouncementTitle}
-                  maxLength={MAX_NAME_LEN}
+                  maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                 />
               </View>
               <View style={styles.inputGroup}>
@@ -2384,7 +2403,7 @@ export default function RequestScreen() {
                     placeholderTextColor="#888888"
                     value={editName}
                     onChangeText={setEditName}
-                    maxLength={MAX_NAME_LEN}
+                    maxLength={MAX_LOCATION_NAME_LEN}
                     returnKeyType="next"
                     onSubmitEditing={() => Keyboard.dismiss()}
                     blurOnSubmit={false}
@@ -2704,7 +2723,7 @@ export default function RequestScreen() {
                       placeholderTextColor="#888888"
                       value={editLocationName}
                       onChangeText={setEditLocationName}
-                      maxLength={MAX_NAME_LEN}
+                      maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                       returnKeyType="next"
                       onSubmitEditing={() => Keyboard.dismiss()}
                       blurOnSubmit={false}
@@ -2928,7 +2947,7 @@ export default function RequestScreen() {
                     placeholderTextColor="#888888"
                     value={newLocationName}
                     onChangeText={setNewLocationName}
-                    maxLength={MAX_NAME_LEN}
+                    maxLength={MAX_LOCATION_NAME_LEN}
                     returnKeyType="next"
                     onSubmitEditing={() => Keyboard.dismiss()}
                     blurOnSubmit={false}
@@ -3333,7 +3352,7 @@ export default function RequestScreen() {
                       placeholderTextColor="#888888"
                       value={newAnnouncementTitle}
                       onChangeText={setNewAnnouncementTitle}
-                      maxLength={MAX_NAME_LEN}
+                      maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                     />
                   </View>
                   <View style={styles.inputGroup}>
@@ -3369,7 +3388,12 @@ export default function RequestScreen() {
                     onPress={async () => {
                       setLoading(true);
                       try {
-                        await apiService.createAnnouncement({ title: newAnnouncementTitle.trim(), body: newAnnouncementBody.trim(), image: newAnnouncementImage || undefined });
+                        const image = getSafeUploadImage(newAnnouncementImage);
+                        await apiService.createAnnouncement({
+                          title: newAnnouncementTitle.trim(),
+                          body: newAnnouncementBody.trim(),
+                          image,
+                        });
                         setNewAnnouncementTitle('');
                         setNewAnnouncementBody('');
                         setNewAnnouncementImage(null);
@@ -3417,7 +3441,7 @@ export default function RequestScreen() {
                         placeholderTextColor="#888888"
                         value={editAnnouncementTitle}
                         onChangeText={setEditAnnouncementTitle}
-                        maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
+                      maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                       />
                     </View>
                     <View style={styles.inputGroup}>
@@ -3453,10 +3477,11 @@ export default function RequestScreen() {
                       onPress={async () => {
                         setLoading(true);
                         try {
+                          const image = getSafeUploadImage(editAnnouncementImage);
                           await apiService.patchAnnouncement(selectedAnnouncement.id, {
                             title: editAnnouncementTitle.trim(),
                             body: editAnnouncementBody.trim(),
-                            image: editAnnouncementImage !== null ? (editAnnouncementImage || '') : '',
+                            image: image !== undefined ? image : '',
                           });
                           setShowEditAnnouncementModal(false);
                           loadAnnouncements();
@@ -3880,7 +3905,7 @@ export default function RequestScreen() {
                       placeholderTextColor="#888888"
                       value={editPostedEventName}
                       onChangeText={setEditPostedEventName}
-                      maxLength={MAX_NAME_LEN}
+                      maxLength={MAX_EVENT_NAME_LEN}
                     />
                   </View>
                   <View style={styles.inputGroup}>
@@ -3987,7 +4012,7 @@ export default function RequestScreen() {
                       placeholderTextColor="#888888"
                       value={newEventName}
                       onChangeText={setNewEventName}
-                      maxLength={MAX_NAME_LEN}
+                      maxLength={MAX_EVENT_NAME_LEN}
                     />
                   </View>
                   <View style={styles.inputGroup}>

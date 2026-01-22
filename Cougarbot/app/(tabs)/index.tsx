@@ -29,8 +29,9 @@ import Svg, { Path, Line, Circle } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
 const CARD_IMAGE_HEIGHT = 180;
-const MAX_NAME_LEN = 40;
-const MAX_ANNOUNCEMENT_TITLE_LEN = 100;
+const MAX_LOCATION_NAME_LEN = 200;
+const MAX_EVENT_NAME_LEN = 500;
+const MAX_ANNOUNCEMENT_TITLE_LEN = 500;
 const MAX_QUALITIES = 6;
 const CHART_W = Math.min(300, Math.max(220, Math.floor(width - 140)));
 const CHART_H = 80;
@@ -1444,7 +1445,7 @@ export default function HomeScreen() {
                   placeholderTextColor="#888888"
                   value={requestEventName}
                   onChangeText={setRequestEventName}
-                  maxLength={MAX_NAME_LEN}
+                  maxLength={MAX_EVENT_NAME_LEN}
                 />
               </View>
 

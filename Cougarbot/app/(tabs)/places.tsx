@@ -47,7 +47,7 @@ const DOT_GLOW_FILL = '#2E7BA638';
 const SVG_W = PAD_L + CHART_W + PAD_R;
 const SVG_H = PAD_T + CHART_H + PAD_B;
 const CARD_IMAGE_HEIGHT = 240;
-const MAX_NAME_LEN = 40;
+const MAX_LOCATION_NAME_LEN = 200;
 const MAX_QUALITIES = 6;
 
 interface LocationPicture {
@@ -1091,7 +1091,7 @@ const countQualities = (text?: string) => {
                   placeholderTextColor="#888888"
                   value={requestLocationName}
                   onChangeText={setRequestLocationName}
-                maxLength={MAX_NAME_LEN}
+                maxLength={MAX_LOCATION_NAME_LEN}
                 />
               </View>
 
