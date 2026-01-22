@@ -47,7 +47,13 @@ def _parse_pictures_json(pictures_json: Optional[str]) -> Optional[list[Location
         data = json.loads(pictures_json)
         if not isinstance(data, list):
             return None
-        return [LocationPicture(**item) if isinstance(item, dict) else None for item in data if item]
+        normalized: list[LocationPicture] = []
+        for item in data:
+            if isinstance(item, dict):
+                normalized.append(LocationPicture(**item))
+            elif isinstance(item, str):
+                normalized.append(LocationPicture(url=item))
+        return normalized or None
     except Exception:
         return None
 

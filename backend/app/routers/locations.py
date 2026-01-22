@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from sqlalchemy import select, insert, desc
 
 from app.db import get_conn, locations, location_activity_ratings, new_id, reviews, utcnow_iso
@@ -27,6 +27,22 @@ class LocationBase(BaseModel):
     description: Optional[str] = None
     most_known_for: Optional[str] = None
     level_of_business: Optional[Literal["high", "moderate", "low"]] = None
+
+    @validator("pictures", pre=True)
+    def _normalize_pictures(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, list):
+            normalized = []
+            for item in value:
+                if isinstance(item, LocationPicture):
+                    normalized.append(item)
+                elif isinstance(item, str):
+                    normalized.append({"url": item})
+                elif isinstance(item, dict):
+                    normalized.append(item)
+            return normalized
+        return value
 
 
 class LocationResponse(BaseModel):
@@ -64,7 +80,13 @@ def _parse_pictures_json(pictures_json: Optional[str]) -> Optional[list[Location
         data = json.loads(pictures_json)
         if not isinstance(data, list):
             return None
-        return [LocationPicture(**item) if isinstance(item, dict) else None for item in data if item]
+        normalized: list[LocationPicture] = []
+        for item in data:
+            if isinstance(item, dict):
+                normalized.append(LocationPicture(**item))
+            elif isinstance(item, str):
+                normalized.append(LocationPicture(url=item))
+        return normalized or None
     except Exception:
         return None
 
@@ -74,7 +96,16 @@ def _serialize_pictures(pictures: Optional[list[LocationPicture]]) -> Optional[s
     if not pictures:
         return None
     try:
-        data = [pic.dict(exclude_none=True) for pic in pictures if pic]
+        data = []
+        for pic in pictures:
+            if isinstance(pic, LocationPicture):
+                data.append(pic.dict(exclude_none=True))
+            elif isinstance(pic, dict):
+                url = pic.get("url")
+                if isinstance(url, str) and url:
+                    data.append({k: v for k, v in pic.items() if v is not None})
+            elif isinstance(pic, str):
+                data.append({"url": pic})
         return json.dumps(data) if data else None
     except Exception:
         return None
