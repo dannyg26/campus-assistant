@@ -47,7 +47,7 @@ const DOT_GLOW_FILL = '#2E7BA638';
 const SVG_W = PAD_L + CHART_W + PAD_R;
 const SVG_H = PAD_T + CHART_H + PAD_B;
 const CARD_IMAGE_HEIGHT = 240;
-const MAX_NAME_LEN = 20;
+const MAX_NAME_LEN = 40;
 const MAX_QUALITIES = 6;
 
 interface LocationPicture {
@@ -718,25 +718,13 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-  const buildPicturesFromUris = async (uris: string[], caption?: string) => {
+  const buildPicturesFromUris = (uris: string[], caption?: string) => {
     if (!uris.length) return undefined;
-    const pictures = await Promise.all(
-      uris.map(async (uri) => {
-        if (uri.startsWith('file://')) {
-          const resp = await fetch(uri);
-          const bl = await resp.blob();
-          const img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-          return { url: img, caption };
-        }
-        return { url: uri, caption };
-      })
-    );
-    return pictures;
+    // Just pass URIs directly - backend will handle them
+    const pictures = uris
+      .filter((uri) => uri && !uri.startsWith('ph://'))
+      .map((uri) => ({ url: uri, caption }));
+    return pictures.length > 0 ? pictures : undefined;
   };
 
   const removeRequestLocationImage = (index: number) => {
@@ -757,7 +745,8 @@ const countQualities = (text?: string) => {
   const renderLocationImages = (
     pictures: Array<LocationPicture | string | null | undefined> | undefined,
     imageStyle: any,
-    placeholderStyle: any
+    placeholderStyle: any,
+    allowSwipe: boolean = false
   ) => {
     const normalized = (pictures || [])
       .map((pic) => (typeof pic === 'string' ? { url: pic } : pic))
@@ -771,24 +760,26 @@ const countQualities = (text?: string) => {
       );
     }
 
-    if (normalized.length === 1) {
+    // For list views (no swipe), just show first image
+    if (!allowSwipe || normalized.length === 1) {
       return (
         <Image source={{ uri: normalized[0].url }} style={imageStyle} resizeMode="cover" />
       );
     }
 
+    // For detail views (allow swipe), show carousel
     return (
       <ScrollView
         horizontal
         pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        style={imageStyle}
+        showsHorizontalScrollIndicator={true}
+        style={{ width: width, height: imageStyle.height || 400 }}
       >
         {normalized.map((pic, idx) => (
           <Image
             key={`${pic.url}-${idx}`}
             source={{ uri: pic.url }}
-            style={imageStyle}
+            style={{ width: width, height: imageStyle.height || 400 }}
             resizeMode="cover"
           />
         ))}
@@ -802,20 +793,25 @@ const countQualities = (text?: string) => {
       Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      allowsMultipleSelection: true,
-      selectionLimit: 8,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets?.length) {
-      const selectedUris = result.assets.map((asset) => asset.uri);
-      setRequestLocationImages((prev) => {
-        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-        return next.slice(0, 8);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: 8,
+        aspect: [4, 3],
+        quality: 0.5,
       });
+      if (!result.canceled && result.assets?.length) {
+        const selectedUris = result.assets.map((asset) => asset.uri);
+        setRequestLocationImages((prev) => {
+          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+          return next.slice(0, 8);
+        });
+      }
+    } catch (error) {
+      console.warn('Image picker error:', error);
+      Alert.alert('Error', 'Failed to pick images. Please try again.');
     }
   };
 
@@ -830,7 +826,7 @@ const countQualities = (text?: string) => {
     }
     setRequestLocationSubmitting(true);
     try {
-      const pictures = await buildPicturesFromUris(
+      const pictures = buildPicturesFromUris(
         requestLocationImages,
         requestLocationTopQualities.trim() || undefined
       );
@@ -1337,7 +1333,8 @@ const countQualities = (text?: string) => {
               {renderLocationImages(
                 selectedLocation.pictures,
                 styles.detailImage,
-                styles.detailImagePlaceholder
+                styles.detailImagePlaceholder,
+                true
               )}
 
               {selectedLocation.description ? (

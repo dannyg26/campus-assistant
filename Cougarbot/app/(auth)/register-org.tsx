@@ -20,6 +20,7 @@ import { router } from 'expo-router';
 import { apiService } from '@/services/api';
 
 export default function RegisterOrgScreen() {
+  const MAX_IMAGE_BYTES = 800_000;
   const [orgName, setOrgName] = useState('');
   const [orgDomains, setOrgDomains] = useState('');
   const [orgImage, setOrgImage] = useState<string | null>(null);
@@ -33,6 +34,19 @@ export default function RegisterOrgScreen() {
   const insets = useSafeAreaInsets();
   const { authenticateWithTokens } = useAuth();
 
+  const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
+    if (!asset) return '';
+    if (asset.base64) {
+      const approxBytes = Math.floor((asset.base64.length * 3) / 4);
+      if (approxBytes > MAX_IMAGE_BYTES) {
+        Alert.alert('Image too large', 'Please choose a smaller image.');
+        return '';
+      }
+      return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+    }
+    return asset.uri;
+  };
+
   const pickOrgImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -40,13 +54,17 @@ export default function RegisterOrgScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setOrgImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setOrgImage(imageUri);
+      }
     }
   };
 
@@ -66,23 +84,6 @@ export default function RegisterOrgScreen() {
 
     setLoading(true);
     try {
-      let orgProfilePic: string | null = null;
-
-      if (orgImage) {
-        if (orgImage.startsWith('file://')) {
-          const resp = await fetch(orgImage);
-          const bl = await resp.blob();
-          orgProfilePic = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          orgProfilePic = orgImage;
-        }
-      }
-
       const domains = orgDomains
         .split(/[,;\n]/)
         .map((d) => d.trim().toLowerCase())
@@ -91,7 +92,7 @@ export default function RegisterOrgScreen() {
       const response = await apiService.registerOrganization({
         org_name: orgName.trim(),
         allowed_email_domains: domains.length ? domains : undefined,
-        org_profile_pic: orgProfilePic || undefined,
+        org_profile_pic: orgImage || undefined,
         admin_name: adminName.trim(),
         admin_email: adminEmail.trim().toLowerCase(),
         admin_password: adminPassword,

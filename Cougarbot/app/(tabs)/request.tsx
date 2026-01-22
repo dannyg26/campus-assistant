@@ -25,8 +25,10 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 
-const MAX_NAME_LEN = 20;
+const MAX_NAME_LEN = 40;
+const MAX_ANNOUNCEMENT_TITLE_LEN = 100;
 const MAX_QUALITIES = 6;
+const MAX_IMAGE_BYTES = 800_000;
 
 const countQualities = (text?: string) => {
   if (!text) return 0;
@@ -36,27 +38,27 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-const buildPicturesFromUris = async (uris: string[], caption?: string) => {
+const buildPicturesFromUris = (uris: string[], caption?: string) => {
   if (!uris.length) return undefined;
-  const pictures = await Promise.all(
-    uris.map(async (uri) => {
-      if (uri.startsWith('file://')) {
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        const reader = new FileReader();
+  // Just pass URIs directly - backend will handle them
+  const pictures = uris
+    .filter((uri) => uri && !uri.startsWith('ph://')) // Skip iOS ph:// URIs
+    .map((uri) => ({ url: uri, caption }));
+  return pictures.length > 0 ? pictures : undefined;
+};
 
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-
-        return { url: base64data, caption };
-      }
-      return { url: uri, caption };
-    })
-  );
-  return pictures;
+const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
+  if (!asset) return '';
+  if (asset.base64) {
+    const approxBytes = Math.floor((asset.base64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      Alert.alert('Image too large', 'Please choose a smaller image.');
+      return '';
+    }
+    const mimeType = asset.mimeType || 'image/jpeg';
+    return `data:${mimeType};base64,${asset.base64}`;
+  }
+  return asset.uri;
 };
 
 const moveImage = (list: string[], index: number, direction: 'left' | 'right') => {
@@ -388,22 +390,26 @@ export default function RequestScreen() {
       return;
     }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      allowsMultipleSelection: true,
-      selectionLimit: 8,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets?.length) {
-      const selectedUris = result.assets.map((asset) => asset.uri);
-      setEditLocationSelectedImages((prev) => {
-        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-        return next.slice(0, 8);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: 8,
+        aspect: [4, 3],
+        quality: 0.5,
       });
+
+      if (!result.canceled && result.assets?.length) {
+        const selectedUris = result.assets.map((asset) => asset.uri);
+        setEditLocationSelectedImages((prev) => {
+          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+          return next.slice(0, 8);
+        });
+      }
+    } catch (error) {
+      console.warn('Image picker error:', error);
+      Alert.alert('Error', 'Failed to pick images. Please try again.');
     }
   };
 
@@ -421,7 +427,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      const pictures = await buildPicturesFromUris(
+      const pictures = buildPicturesFromUris(
         editLocationSelectedImages,
         editLocationTopQualities.trim() || undefined
       );
@@ -452,22 +458,26 @@ export default function RequestScreen() {
       return;
     }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      allowsMultipleSelection: true,
-      selectionLimit: 8,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets?.length) {
-      const selectedUris = result.assets.map((asset) => asset.uri);
-      setNewLocationSelectedImages((prev) => {
-        const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-        return next.slice(0, 8);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: 8,
+        aspect: [4, 3],
+        quality: 0.5,
       });
+
+      if (!result.canceled && result.assets?.length) {
+        const selectedUris = result.assets.map((asset) => asset.uri);
+        setNewLocationSelectedImages((prev) => {
+          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
+          return next.slice(0, 8);
+        });
+      }
+    } catch (error) {
+      console.warn('Image picker error:', error);
+      Alert.alert('Error', 'Failed to pick images. Please try again.');
     }
   };
 
@@ -483,7 +493,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      const pictures = await buildPicturesFromUris(
+      const pictures = buildPicturesFromUris(
         newLocationSelectedImages,
         newLocationTopQualities.trim() || undefined
       );
@@ -491,6 +501,7 @@ export default function RequestScreen() {
       await apiService.createLocation({
         name: newLocationName.trim(),
         address: newLocationAddress.trim(),
+        description: newLocationDescription.trim() || undefined,
         most_known_for: newLocationTopQualities || undefined,
         level_of_business: newLocationLevelOfBusiness || undefined,
         pictures,
@@ -499,6 +510,7 @@ export default function RequestScreen() {
       Alert.alert('Success', 'Location created successfully!');
       setNewLocationName('');
       setNewLocationAddress('');
+      setNewLocationDescription('');
       setNewLocationTopQualities('');
       setNewLocationLevelOfBusiness('');
       setNewLocationSelectedImages([]);
@@ -574,13 +586,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setNewEventImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setNewEventImage(imageUri);
+      }
     }
   };
 
@@ -595,28 +611,13 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      let img: string | undefined;
-      if (newEventImage) {
-        if (newEventImage.startsWith('file://')) {
-          const resp = await fetch(newEventImage);
-          const bl = await resp.blob();
-          img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          img = newEventImage;
-        }
-      }
       await apiService.createEvent({
         event_name: newEventName.trim(),
         location: newEventLocation.trim() || undefined,
         top_qualities: newEventTopQualities.trim() || undefined,
         description: newEventDescription.trim() || undefined,
         meeting_time: newEventMeetingTime.trim() || undefined,
-        picture: img,
+        picture: newEventImage || undefined,
       });
       Alert.alert('Success', 'Event created');
       setNewEventName('');
@@ -653,13 +654,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setEditEventImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setEditEventImage(imageUri);
+      }
     }
   };
 
@@ -675,28 +680,13 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      let img: string | undefined;
-      if (editEventImage) {
-        if (editEventImage.startsWith('file://')) {
-          const resp = await fetch(editEventImage);
-          const bl = await resp.blob();
-          img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          img = editEventImage;
-        }
-      }
       await apiService.updateEventRequest(selectedEventRequest.id, {
         event_name: editEventName.trim(),
         location: editEventLocation.trim() || undefined,
         top_qualities: editEventTopQualities.trim() || undefined,
         description: editEventDescription.trim() || undefined,
         meeting_time: editEventMeetingTime.trim() || undefined,
-        picture: img,
+        picture: editEventImage || undefined,
         admin_notes: editEventAdminNotes.trim() || undefined,
       });
       Alert.alert('Success', 'Event request updated');
@@ -776,13 +766,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setEditPostedEventImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setEditPostedEventImage(imageUri);
+      }
     }
   };
 
@@ -798,28 +792,13 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      let img: string | undefined;
-      if (editPostedEventImage) {
-        if (editPostedEventImage.startsWith('file://')) {
-          const resp = await fetch(editPostedEventImage);
-          const bl = await resp.blob();
-          img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          img = editPostedEventImage;
-        }
-      }
       await apiService.patchEvent(selectedPostedEvent.id, {
         event_name: editPostedEventName.trim(),
         location: editPostedEventLocation.trim() || undefined,
         top_qualities: editPostedEventTopQualities.trim() || undefined,
         description: editPostedEventDescription.trim() || undefined,
         meeting_time: editPostedEventMeetingTime.trim() || undefined,
-        picture: img,
+        picture: editPostedEventImage || undefined,
       });
       Alert.alert('Success', 'Event updated');
       loadEvents();
@@ -918,14 +897,18 @@ export default function RequestScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setEditMemberProfilePic(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setEditMemberProfilePic(imageUri);
+      }
     }
   };
 
@@ -936,13 +919,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setNewAnnouncementImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setNewAnnouncementImage(imageUri);
+      }
     }
   };
 
@@ -953,13 +940,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setEditAnnouncementImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setEditAnnouncementImage(imageUri);
+      }
     }
   };
 
@@ -970,29 +961,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      let data = result.assets[0].uri;
-      if (data.startsWith('file://')) {
-        try {
-          const response = await fetch(data);
-          const blob = await response.blob();
-          const reader = new FileReader();
-          data = await new Promise<string>((resolve, reject) => {
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-        } catch (e) {
-          Alert.alert('Error', 'Failed to process image');
-          return;
-        }
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setOrgProfilePicForSettings(imageUri);
       }
-      setOrgProfilePicForSettings(data);
     }
   };
 
@@ -1006,23 +985,9 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 if a new image was selected
-      let profilePic = editMemberProfilePic;
-      if (editMemberProfilePic && editMemberProfilePic.startsWith('file://')) {
-        const response = await fetch(editMemberProfilePic);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        profilePic = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-      }
-
       await apiService.updateUserProfile(selectedMember.id, {
         name: editMemberName.trim(),
-        profile_pic: profilePic || undefined,
+        profile_pic: editMemberProfilePic || undefined,
       });
 
       if (editMemberRole && editMemberRole !== selectedMember.role) {
@@ -1058,14 +1023,18 @@ export default function RequestScreen() {
 
     // Launch image picker
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setSelectedImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setSelectedImage(imageUri);
+      }
     }
   };
 
@@ -1076,13 +1045,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setStudentAnnouncementImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setStudentAnnouncementImage(imageUri);
+      }
     }
   };
 
@@ -1093,13 +1066,17 @@ export default function RequestScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setStudentEventImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setStudentEventImage(imageUri);
+      }
     }
   };
 
@@ -1116,20 +1093,7 @@ export default function RequestScreen() {
     setLoading(true);
     try {
       // Convert image to base64 if an image was selected
-      let pictures;
-      if (selectedImage && selectedImage.startsWith('file://')) {
-        const response = await fetch(selectedImage);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        pictures = [{ url: base64data, caption: topQualities || description }];
-      }
+      const pictures = selectedImage ? [{ url: selectedImage, caption: topQualities || description }] : undefined;
 
       await apiService.createLocationRequest({
         name: name.trim(),
@@ -1164,25 +1128,10 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      let img: string | undefined;
-      if (studentAnnouncementImage) {
-        if (studentAnnouncementImage.startsWith('file://')) {
-          const resp = await fetch(studentAnnouncementImage);
-          const bl = await resp.blob();
-          img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          img = studentAnnouncementImage;
-        }
-      }
       await apiService.createAnnouncementRequest({
         title: studentAnnouncementTitle.trim(),
         body: studentAnnouncementBody.trim(),
-        image: img,
+        image: studentAnnouncementImage || undefined,
       });
       Alert.alert('Submitted', 'Your announcement request was sent.');
       setStudentAnnouncementTitle('');
@@ -1207,28 +1156,13 @@ export default function RequestScreen() {
     }
     setLoading(true);
     try {
-      let img: string | undefined;
-      if (studentEventImage) {
-        if (studentEventImage.startsWith('file://')) {
-          const resp = await fetch(studentEventImage);
-          const bl = await resp.blob();
-          img = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onloadend = () => res(r.result as string);
-            r.onerror = rej;
-            r.readAsDataURL(bl);
-          });
-        } else {
-          img = studentEventImage;
-        }
-      }
       await apiService.createEventRequest({
         event_name: studentEventName.trim(),
         location: studentEventLocation.trim() || undefined,
         top_qualities: studentEventTopQualities.trim() || undefined,
         description: studentEventDescription.trim() || undefined,
         meeting_time: studentEventMeetingTime.trim() || undefined,
-        picture: img,
+        picture: studentEventImage || undefined,
       });
       Alert.alert('Submitted', 'Your event request was sent.');
       setStudentEventName('');
@@ -1578,14 +1512,18 @@ export default function RequestScreen() {
 
     // Launch image picker
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setEditSelectedImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setEditSelectedImage(imageUri);
+      }
     }
   };
 
@@ -1603,25 +1541,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 if a new image was selected
-      let pictures;
-      if (editSelectedImage && editSelectedImage.startsWith('file://')) {
-        // New image selected, convert to base64
-        const response = await fetch(editSelectedImage);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        pictures = [{ url: base64data, caption: editDescription }];
-      } else if (editSelectedImage) {
-        // Existing image URL
-        pictures = [{ url: editSelectedImage, caption: editDescription }];
-      }
+      const pictures = editSelectedImage ? [{ url: editSelectedImage, caption: editDescription }] : undefined;
 
       await apiService.updateLocationRequest(selectedRequest.id, {
         name: editName.trim(),
@@ -1656,25 +1576,7 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 if a new image was selected
-      let pictures;
-      if (editSelectedImage && editSelectedImage.startsWith('file://')) {
-        // New image selected, convert to base64
-        const response = await fetch(editSelectedImage);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        
-        const base64data = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        pictures = [{ url: base64data, caption: editTopQualities }];
-      } else if (editSelectedImage) {
-        // Existing image URL
-        pictures = [{ url: editSelectedImage, caption: editTopQualities }];
-      }
+      const pictures = editSelectedImage ? [{ url: editSelectedImage, caption: editTopQualities }] : undefined;
 
       // Create location from request
       await apiService.createLocation({
@@ -1780,7 +1682,7 @@ export default function RequestScreen() {
                   placeholderTextColor="#888888"
                   value={name}
                   onChangeText={setName}
-                  maxLength={MAX_NAME_LEN}
+                  maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                   returnKeyType="next"
                   onSubmitEditing={() => Keyboard.dismiss()}
                   blurOnSubmit={false}
@@ -2765,11 +2667,16 @@ export default function RequestScreen() {
                   <ScrollView
                     horizontal
                     pagingEnabled
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.detailImage}
+                    showsHorizontalScrollIndicator={true}
+                    style={{ width: SCREEN_WIDTH, height: 400 }}
                   >
                     {editLocationSelectedImages.map((uri, idx) => (
-                      <Image key={`${uri}-${idx}`} source={{ uri }} style={styles.detailImage} resizeMode="cover" />
+                      <Image
+                        key={`${uri}-${idx}`}
+                        source={{ uri }}
+                        style={{ width: SCREEN_WIDTH, height: 400 }}
+                        resizeMode="cover"
+                      />
                     ))}
                   </ScrollView>
                 )
@@ -2805,20 +2712,6 @@ export default function RequestScreen() {
                   </View>
 
                   <View style={styles.inputGroup}>
-                    <ThemedText style={styles.label}>Address *</ThemedText>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Full address"
-                      placeholderTextColor="#888888"
-                      value={editLocationAddress}
-                      onChangeText={setEditLocationAddress}
-                      multiline
-                      returnKeyType="next"
-                      blurOnSubmit={false}
-                    />
-                  </View>
-
-                  <View style={styles.inputGroup}>
                     <ThemedText style={styles.label}>Description (optional)</ThemedText>
                     <TextInput
                       style={[styles.input, styles.textArea]}
@@ -2828,6 +2721,20 @@ export default function RequestScreen() {
                       onChangeText={setEditLocationDescription}
                       multiline
                       numberOfLines={3}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
+                    />
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <ThemedText style={styles.label}>Address *</ThemedText>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Full address"
+                      placeholderTextColor="#888888"
+                      value={editLocationAddress}
+                      onChangeText={setEditLocationAddress}
+                      multiline
                       returnKeyType="next"
                       blurOnSubmit={false}
                     />
@@ -2987,6 +2894,31 @@ export default function RequestScreen() {
               contentContainerStyle={styles.detailContent}
               showsVerticalScrollIndicator={false}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+              {newLocationSelectedImages.length > 0 && (
+                newLocationSelectedImages.length === 1 ? (
+                  <Image
+                    source={{ uri: newLocationSelectedImages[0] }}
+                    style={styles.detailImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <ScrollView
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={true}
+                    style={{ width: SCREEN_WIDTH, height: 400 }}
+                  >
+                    {newLocationSelectedImages.map((uri, idx) => (
+                      <Image
+                        key={`${uri}-${idx}`}
+                        source={{ uri }}
+                        style={{ width: SCREEN_WIDTH, height: 400 }}
+                        resizeMode="cover"
+                      />
+                    ))}
+                  </ScrollView>
+                )
+              )}
               <View style={styles.detailEditForm}>
                 <View style={styles.inputGroup}>
                   <ThemedText style={styles.label}>Location Name *</ThemedText>
@@ -2999,6 +2931,21 @@ export default function RequestScreen() {
                     maxLength={MAX_NAME_LEN}
                     returnKeyType="next"
                     onSubmitEditing={() => Keyboard.dismiss()}
+                    blurOnSubmit={false}
+                  />
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <ThemedText style={styles.label}>Description (optional)</ThemedText>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Short description of this place"
+                    placeholderTextColor="#888888"
+                    value={newLocationDescription}
+                    onChangeText={setNewLocationDescription}
+                    multiline
+                    numberOfLines={3}
+                    returnKeyType="next"
                     blurOnSubmit={false}
                   />
                 </View>
@@ -3422,22 +3369,7 @@ export default function RequestScreen() {
                     onPress={async () => {
                       setLoading(true);
                       try {
-                        let img: string | undefined;
-                        if (newAnnouncementImage) {
-                          if (newAnnouncementImage.startsWith('file://')) {
-                            const resp = await fetch(newAnnouncementImage);
-                            const bl = await resp.blob();
-                            img = await new Promise<string>((res, rej) => {
-                              const r = new FileReader();
-                              r.onloadend = () => res(r.result as string);
-                              r.onerror = rej;
-                              r.readAsDataURL(bl);
-                            });
-                          } else {
-                            img = newAnnouncementImage;
-                          }
-                        }
-                        await apiService.createAnnouncement({ title: newAnnouncementTitle.trim(), body: newAnnouncementBody.trim(), image: img });
+                        await apiService.createAnnouncement({ title: newAnnouncementTitle.trim(), body: newAnnouncementBody.trim(), image: newAnnouncementImage || undefined });
                         setNewAnnouncementTitle('');
                         setNewAnnouncementBody('');
                         setNewAnnouncementImage(null);
@@ -3485,7 +3417,7 @@ export default function RequestScreen() {
                         placeholderTextColor="#888888"
                         value={editAnnouncementTitle}
                         onChangeText={setEditAnnouncementTitle}
-                        maxLength={MAX_NAME_LEN}
+                        maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                       />
                     </View>
                     <View style={styles.inputGroup}>
@@ -3521,27 +3453,10 @@ export default function RequestScreen() {
                       onPress={async () => {
                         setLoading(true);
                         try {
-                          let img: string | undefined;
-                          if (editAnnouncementImage !== null && editAnnouncementImage !== undefined) {
-                            if (editAnnouncementImage.startsWith('file://')) {
-                              const resp = await fetch(editAnnouncementImage);
-                              const bl = await resp.blob();
-                              img = await new Promise<string>((res, rej) => {
-                                const r = new FileReader();
-                                r.onloadend = () => res(r.result as string);
-                                r.onerror = rej;
-                                r.readAsDataURL(bl);
-                              });
-                            } else {
-                              img = editAnnouncementImage;
-                            }
-                          } else {
-                            img = '';
-                          }
                           await apiService.patchAnnouncement(selectedAnnouncement.id, {
                             title: editAnnouncementTitle.trim(),
                             body: editAnnouncementBody.trim(),
-                            image: img,
+                            image: editAnnouncementImage !== null ? (editAnnouncementImage || '') : '',
                           });
                           setShowEditAnnouncementModal(false);
                           loadAnnouncements();
@@ -3830,7 +3745,7 @@ export default function RequestScreen() {
                       placeholderTextColor="#888888"
                       value={editEventName}
                       onChangeText={setEditEventName}
-                      maxLength={MAX_NAME_LEN}
+                        maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
                     />
                   </View>
                   <View style={styles.inputGroup}>

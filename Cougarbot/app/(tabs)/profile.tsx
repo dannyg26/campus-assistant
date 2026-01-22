@@ -23,6 +23,7 @@ import { useRouter } from 'expo-router';
 import { apiService } from '@/services/api';
 
 export default function ProfileScreen() {
+  const MAX_IMAGE_BYTES = 800_000;
   const { logout, user, login, refreshUser } = useAuth();
   const router = useRouter();
   const [showEditName, setShowEditName] = useState(false);
@@ -32,6 +33,19 @@ export default function ProfileScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
+    if (!asset) return '';
+    if (asset.base64) {
+      const approxBytes = Math.floor((asset.base64.length * 3) / 4);
+      if (approxBytes > MAX_IMAGE_BYTES) {
+        Alert.alert('Image too large', 'Please choose a smaller image.');
+        return '';
+      }
+      return `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+    }
+    return asset.uri;
+  };
 
   const handleLogout = async () => {
     Alert.alert(
@@ -88,14 +102,18 @@ export default function ProfileScreen() {
 
     // Launch image picker
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setSelectedImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setSelectedImage(imageUri);
+      }
     }
   };
 
@@ -107,38 +125,18 @@ export default function ProfileScreen() {
 
     setLoading(true);
     try {
-      // Convert image to base64 data URL
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
-      const reader = new FileReader();
-      
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        try {
-          await apiService.updateProfile({ profile_pic: base64data });
-          Alert.alert('Success', 'Profile picture updated successfully');
-          setShowEditProfilePic(false);
-          setSelectedImage(null);
-          // Refresh user data
-          if (user) {
-            user.profile_pic = base64data;
-          }
-        } catch (error: any) {
-          Alert.alert('Error', error.response?.data?.detail || 'Failed to update profile picture');
-        } finally {
-          setLoading(false);
-        }
-      };
-      
-      reader.onerror = () => {
-        setLoading(false);
-        Alert.alert('Error', 'Failed to process image');
-      };
-      
-      reader.readAsDataURL(blob);
+      await apiService.updateProfile({ profile_pic: selectedImage });
+      Alert.alert('Success', 'Profile picture updated successfully');
+      setShowEditProfilePic(false);
+      setSelectedImage(null);
+      // Refresh user data
+      if (user) {
+        user.profile_pic = selectedImage;
+      }
     } catch (error: any) {
-      setLoading(false);
       Alert.alert('Error', error.response?.data?.detail || 'Failed to update profile picture');
+    } finally {
+      setLoading(false);
     }
   };
 

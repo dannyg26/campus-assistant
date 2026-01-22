@@ -29,7 +29,8 @@ import Svg, { Path, Line, Circle } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
 const CARD_IMAGE_HEIGHT = 180;
-const MAX_NAME_LEN = 20;
+const MAX_NAME_LEN = 40;
+const MAX_ANNOUNCEMENT_TITLE_LEN = 100;
 const MAX_QUALITIES = 6;
 const CHART_W = Math.min(300, Math.max(220, Math.floor(width - 140)));
 const CHART_H = 80;
@@ -47,6 +48,21 @@ const DOT_FILL = '#2E7BA6';
 const DOT_GLOW_FILL = '#2E7BA638';
 const SVG_W = PAD_L + CHART_W + PAD_R;
 const SVG_H = PAD_T + CHART_H + PAD_B;
+const MAX_IMAGE_BYTES = 800_000;
+
+const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
+  if (!asset) return '';
+  if (asset.base64) {
+    const approxBytes = Math.floor((asset.base64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      Alert.alert('Image too large', 'Please choose a smaller image.');
+      return '';
+    }
+    const mimeType = asset.mimeType || 'image/jpeg';
+    return `data:${mimeType};base64,${asset.base64}`;
+  }
+  return asset.uri;
+};
 
 type TabType = 'foryou' | 'events' | 'announcements';
 
@@ -511,13 +527,17 @@ export default function HomeScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setRequestAnnouncementImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setRequestAnnouncementImage(imageUri);
+      }
     }
   };
 
@@ -528,13 +548,17 @@ export default function HomeScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      setRequestEventImage(result.assets[0].uri);
+      const imageUri = getPickerAssetUri(result.assets[0]);
+      if (imageUri) {
+        setRequestEventImage(imageUri);
+      }
     }
   };
 
@@ -611,31 +635,18 @@ export default function HomeScreen() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      base64: true,
     });
     if (!result.canceled && result.assets[0]) {
-      let data = result.assets[0].uri;
-      if (data.startsWith('file://')) {
-        try {
-          const response = await fetch(data);
-          const blob = await response.blob();
-          const reader = new FileReader();
-          data = await new Promise<string>((resolve, reject) => {
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-        } catch (e) {
-          Alert.alert('Error', 'Failed to process image');
-          return;
-        }
-      }
       try {
-        await apiService.updateOrgProfilePic(data);
-        setOrgProfilePic(data);
+        const imageUri = getPickerAssetUri(result.assets[0]);
+        if (!imageUri) return;
+        await apiService.updateOrgProfilePic(imageUri);
+        setOrgProfilePic(imageUri);
       } catch (e: any) {
         Alert.alert('Error', e?.response?.data?.detail || 'Failed to update org picture');
       }
@@ -752,7 +763,8 @@ export default function HomeScreen() {
   const renderPlaceImages = (
     pictures: Array<{ url: string } | string | null | undefined> | undefined,
     imageStyle: any,
-    placeholderStyle: any
+    placeholderStyle: any,
+    allowSwipe: boolean = false
   ) => {
     const normalized = (pictures || [])
       .map((pic) => (typeof pic === 'string' ? { url: pic } : pic))
@@ -766,19 +778,26 @@ export default function HomeScreen() {
       );
     }
 
-    if (normalized.length === 1) {
+    // For list views (no swipe), just show first image
+    if (!allowSwipe || normalized.length === 1) {
       return <Image source={{ uri: normalized[0].url }} style={imageStyle} resizeMode="cover" />;
     }
 
+    // For detail views (allow swipe), show carousel
     return (
       <ScrollView
         horizontal
         pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        style={imageStyle}
+        showsHorizontalScrollIndicator={true}
+        style={{ width: width, height: imageStyle.height || 400 }}
       >
         {normalized.map((pic, idx) => (
-          <Image key={`${pic.url}-${idx}`} source={{ uri: pic.url }} style={imageStyle} resizeMode="cover" />
+          <Image
+            key={`${pic.url}-${idx}`}
+            source={{ uri: pic.url }}
+            style={{ width: width, height: imageStyle.height || 400 }}
+            resizeMode="cover"
+          />
         ))}
       </ScrollView>
     );
@@ -1324,7 +1343,7 @@ export default function HomeScreen() {
                 placeholderTextColor="#888888"
                 value={requestAnnouncementTitle}
                 onChangeText={setRequestAnnouncementTitle}
-                maxLength={MAX_NAME_LEN}
+                maxLength={MAX_ANNOUNCEMENT_TITLE_LEN}
               />
 
               <ThemedText style={styles.requestFormLabel}>Body *</ThemedText>
@@ -1373,25 +1392,10 @@ export default function HomeScreen() {
                 onPress={async () => {
                   setRequestAnnouncementSubmitting(true);
                   try {
-                    let img: string | undefined;
-                    if (requestAnnouncementImage) {
-                      if (requestAnnouncementImage.startsWith('file://')) {
-                        const resp = await fetch(requestAnnouncementImage);
-                        const bl = await resp.blob();
-                        img = await new Promise<string>((res, rej) => {
-                          const r = new FileReader();
-                          r.onloadend = () => res(r.result as string);
-                          r.onerror = rej;
-                          r.readAsDataURL(bl);
-                        });
-                      } else {
-                        img = requestAnnouncementImage;
-                      }
-                    }
                     await apiService.createAnnouncementRequest({
                       title: requestAnnouncementTitle.trim(),
                       body: requestAnnouncementBody.trim(),
-                      image: img,
+                      image: requestAnnouncementImage || undefined,
                     });
                     Alert.alert('Submitted', 'Your request was sent. An admin will review it.');
                     setShowRequestAnnouncementModal(false);
@@ -1521,28 +1525,13 @@ export default function HomeScreen() {
                   }
                   setRequestEventSubmitting(true);
                   try {
-                    let img: string | undefined;
-                    if (requestEventImage) {
-                      if (requestEventImage.startsWith('file://')) {
-                        const resp = await fetch(requestEventImage);
-                        const bl = await resp.blob();
-                        img = await new Promise<string>((res, rej) => {
-                          const r = new FileReader();
-                          r.onloadend = () => res(r.result as string);
-                          r.onerror = rej;
-                          r.readAsDataURL(bl);
-                        });
-                      } else {
-                        img = requestEventImage;
-                      }
-                    }
                     await apiService.createEventRequest({
                       event_name: requestEventName.trim(),
                       location: requestEventLocation.trim() || undefined,
                       meeting_time: requestEventMeetingTime.trim() || undefined,
                       description: requestEventDescription.trim() || undefined,
                       top_qualities: requestEventTopQualities.trim() || undefined,
-                      picture: img,
+                      picture: requestEventImage || undefined,
                     });
                     Alert.alert('Submitted', 'Your event request was sent. An admin will review it.');
                     setShowRequestEventModal(false);
@@ -1640,7 +1629,8 @@ export default function HomeScreen() {
                 {renderPlaceImages(
                   selectedPlace.pictures,
                   styles.eventDetailImage,
-                  styles.cardImagePlaceholder
+                  styles.cardImagePlaceholder,
+                  true
                 )}
 
                 {selectedPlace.address ? (
@@ -2177,7 +2167,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 12,
-    marginBottom: 16,
+    marginBottom: 28,
     backgroundColor: '#F0F0F0',
   },
   eventDetailMeta: {
