@@ -1,39 +1,31 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+// services/api.ts
+import axios, { AxiosError, AxiosInstance } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 
+// ===============================
 // API Base URL Configuration
-// ⚠️ NETWORK SETUP FOR MOBILE TESTING:
-// 1. Find your LOCAL network IP (not public IP):
-//    Windows: Run "ipconfig" → Look for "IPv4 Address" (usually 192.168.x.x)
-//    Mac/Linux: Run "ifconfig" → Look for "inet" under your WiFi adapter
-// 2. Make sure phone and laptop are on the SAME WiFi network
-// 3. Start backend with: python -m uvicorn main:app --reload --host 0.0.0.0
-// 4. Update LAPTOP_IP below with your LOCAL network IP (e.g., '192.168.1.100')
-// 
-// Current IP - use your LOCAL network IP (192.168.x.x) not public IP
-// If 192.168.1.70 doesn't work, find your IP with: ipconfig (Windows) or ifconfig (Mac/Linux)
-const LAPTOP_IP = '192.168.1.100'; // ⚠️ CHANGE THIS to your LOCAL network IP if needed
+// ===============================
+const LAPTOP_IP = '192.168.1.100'; // CHANGE to your local IPv4 if needed
 
 const ENV_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 
 const normalizeBaseUrl = (url: string): string => url.replace(/\/+$/, '');
 
 const getApiBaseUrl = (): string => {
-  if (ENV_API_BASE_URL) {
-    return normalizeBaseUrl(ENV_API_BASE_URL);
-  }
+  if (ENV_API_BASE_URL) return normalizeBaseUrl(ENV_API_BASE_URL);
+
   if (!__DEV__) {
     return 'https://your-api-domain.com'; // Production
   }
 
-  // On web (laptop browser), use localhost
-  if (Platform.OS === 'web') {
-    return 'http://127.0.0.1:8000';
-  }
+  // Web (laptop browser)
+  if (Platform.OS === 'web') return 'http://127.0.0.1:8000';
 
-  // On mobile, use laptop's IP address on local network
-  // Make sure your laptop and phone are on the same WiFi network
+  // Mobile (device) needs laptop LAN IP
   return `http://${LAPTOP_IP}:8000`;
 };
 
@@ -42,37 +34,126 @@ const API_BASE_URL = getApiBaseUrl();
 // Token storage key
 const TOKEN_KEY = '@cougarbot:access_token';
 
+// ===============================
+// Helpers
+// ===============================
+function inferMimeType(uri?: string, fallback = 'image/jpeg'): string {
+  if (!uri) return fallback;
+  const clean = uri.split('?')[0].toLowerCase();
+  if (clean.endsWith('.png')) return 'image/png';
+  if (clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'image/jpeg';
+  if (clean.endsWith('.heic')) return 'image/heic';
+  if (clean.endsWith('.webp')) return 'image/webp';
+  return fallback;
+}
+
+function toAbsoluteUrl(url: string): string {
+  if (!url) return url;
+  return url.startsWith('http') ? url : `${API_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+function axiosErrorMessage(err: any): string {
+  const ax = err as AxiosError<any>;
+  const status = ax?.response?.status;
+  const detail =
+    (ax?.response?.data as any)?.detail ??
+    (ax?.response?.data as any)?.message ??
+    ax?.message ??
+    'Request failed';
+
+  return status ? `${status}: ${String(detail)}` : String(detail);
+}
+
+// Use `any` wrapper so TypeScript stops complaining if its snapshot is stale.
+const FS: any = FileSystem;
+
+// Encoding fallback:
+// - Prefer FS.EncodingType.Base64 if it exists
+// - Else fallback to string 'base64' (supported at runtime)
+const BASE64_ENCODING: any = FS?.EncodingType?.Base64 ?? 'base64';
+
+function isReadableFileUri(uri: string): boolean {
+  return uri.startsWith('file://');
+}
+
+// Resolve iOS ph:// URIs if we need to read them
+async function resolveIosPhotoUriIfNeeded(asset: ImagePicker.ImagePickerAsset): Promise<string> {
+  const uri = asset.uri;
+  if (!uri) throw new Error('Selected image is missing a URI');
+
+  if (!uri.startsWith('ph://')) return uri;
+
+  if (asset.assetId) {
+    const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+    if (info?.localUri) return info.localUri;
+  }
+
+  throw new Error(
+    `iOS photo URI (ph://) must be resolved to file:// before reading. ` +
+      `Ensure MediaLibrary permissions are granted and the picker returns assetId. URI=${uri}`
+  );
+}
+
+async function readBase64FromUri(uri: string): Promise<string> {
+  // If it's already file://, read directly
+  if (isReadableFileUri(uri)) {
+    return await FS.readAsStringAsync(uri, { encoding: BASE64_ENCODING });
+  }
+
+  // Attempt: copy to app cache then read (helps for some content:// URIs)
+  const extGuess = (() => {
+    const clean = uri.split('?')[0].toLowerCase();
+    if (clean.endsWith('.png')) return 'png';
+    if (clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'jpg';
+    if (clean.endsWith('.heic')) return 'heic';
+    if (clean.endsWith('.webp')) return 'webp';
+    return 'jpg';
+  })();
+
+  const baseDir = FS.cacheDirectory ?? FS.documentDirectory;
+  if (!baseDir) {
+    throw new Error('No writable directory available (cacheDirectory/documentDirectory are null).');
+  }
+
+  const dest = `${baseDir}upload_${Date.now()}.${extGuess}`;
+
+  try {
+    await FS.copyAsync({ from: uri, to: dest });
+    return await FS.readAsStringAsync(dest, { encoding: BASE64_ENCODING });
+  } catch {
+    throw new Error(
+      `Cannot read image data from URI. If this is iOS and the URI starts with "ph://", resolve it to file:// first. URI=${uri}`
+    );
+  } finally {
+    await FS.deleteAsync(dest, { idempotent: true }).catch(() => {});
+  }
+}
+
 class ApiService {
   private api: AxiosInstance;
 
   constructor() {
     this.api = axios.create({
       baseURL: API_BASE_URL,
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
 
-    // Add request interceptor to include auth token
     this.api.interceptors.request.use(
       async (config) => {
         const token = await AsyncStorage.getItem(TOKEN_KEY);
         if (token) {
+          config.headers = config.headers ?? {};
           config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
       },
-      (error) => {
-        return Promise.reject(error);
-      }
+      (error) => Promise.reject(error)
     );
 
-    // Add response interceptor to handle errors
     this.api.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
         if (error.response?.status === 401) {
-          // Token expired or invalid, clear storage
           await AsyncStorage.removeItem(TOKEN_KEY);
         }
         return Promise.reject(error);
@@ -81,11 +162,8 @@ class ApiService {
   }
 
   async setToken(token: string | null): Promise<void> {
-    if (token) {
-      await AsyncStorage.setItem(TOKEN_KEY, token);
-    } else {
-      await AsyncStorage.removeItem(TOKEN_KEY);
-    }
+    if (token) await AsyncStorage.setItem(TOKEN_KEY, token);
+    else await AsyncStorage.removeItem(TOKEN_KEY);
   }
 
   async getToken(): Promise<string | null> {
@@ -96,35 +174,27 @@ class ApiService {
     await AsyncStorage.removeItem(TOKEN_KEY);
   }
 
+  // ===============================
   // Auth endpoints
+  // ===============================
   async login(orgId: string, email: string, password: string) {
-    const response = await this.api.post('/auth/login', {
-      org_id: orgId,
-      email,
-      password,
-    });
+    const response = await this.api.post('/auth/login', { org_id: orgId, email, password });
     return response.data;
   }
 
   async register(orgId: string, name: string, email: string, password: string) {
-    const response = await this.api.post('/auth/register', {
-      org_id: orgId,
-      name,
-      email,
-      password,
-    });
+    const response = await this.api.post('/auth/register', { org_id: orgId, name, email, password });
     return response.data;
   }
 
   async refreshToken(orgId: string, refreshToken: string) {
-    const response = await this.api.post('/auth/refresh', {
-      org_id: orgId,
-      refresh_token: refreshToken,
-    });
+    const response = await this.api.post('/auth/refresh', { org_id: orgId, refresh_token: refreshToken });
     return response.data;
   }
 
+  // ===============================
   // Organization endpoints
+  // ===============================
   async getOrganizations() {
     const response = await this.api.get('/orgs');
     return response.data;
@@ -138,15 +208,6 @@ class ApiService {
   async updateOrgProfilePic(orgProfilePic: string | null) {
     const response = await this.api.patch('/orgs/me', { org_profile_pic: orgProfilePic });
     return response.data;
-  }
-
-  async uploadBase64Image(dataUrl: string): Promise<string> {
-    const response = await this.api.post('/uploads/base64', { data_url: dataUrl });
-    const url = response.data?.url;
-    if (!url) {
-      throw new Error('Upload failed: missing URL');
-    }
-    return url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
   }
 
   async updateOrgName(name: string) {
@@ -166,7 +227,50 @@ class ApiService {
     return response.data;
   }
 
+  // ===============================
+  // Uploads
+  // ===============================
+  async uploadBase64Image(dataUrl: string): Promise<string> {
+    try {
+      const response = await this.api.post('/uploads/base64', { data_url: dataUrl });
+      const url = response.data?.url;
+      if (!url) throw new Error('Upload failed: missing URL in response');
+      return toAbsoluteUrl(url);
+    } catch (e: any) {
+      throw new Error(`Image upload failed (${axiosErrorMessage(e)})`);
+    }
+  }
+
+  async uploadLocationImages(images: ImagePicker.ImagePickerAsset[]): Promise<Array<{ url: string }>> {
+    const uploaded: Array<{ url: string }> = [];
+
+    for (const asset of images) {
+      let base64 = asset.base64;
+
+      if (!base64) {
+        let uri = asset.uri;
+        if (!uri) throw new Error('Selected image is missing a URI');
+
+        if (uri.startsWith('ph://')) {
+          uri = await resolveIosPhotoUriIfNeeded(asset);
+        }
+
+        base64 = await readBase64FromUri(uri);
+      }
+
+      const mimeType = asset.mimeType || inferMimeType(asset.uri, 'image/jpeg');
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+
+      const url = await this.uploadBase64Image(dataUrl);
+      uploaded.push({ url });
+    }
+
+    return uploaded;
+  }
+
+  // ===============================
   // Location endpoints
+  // ===============================
   async getLocations(params?: {
     search?: string;
     level_of_business?: 'high' | 'moderate' | 'low';
@@ -196,19 +300,28 @@ class ApiService {
     return response.data;
   }
 
-  async updateLocation(locationId: string, data: {
-    name: string;
-    address: string;
-    pictures?: Array<{ url: string; caption?: string }>;
-    description?: string;
-    most_known_for?: string;
-    level_of_business?: 'high' | 'moderate' | 'low';
-  }) {
+  async updateLocation(
+    locationId: string,
+    data: {
+      name: string;
+      address: string;
+      pictures?: Array<{ url: string; caption?: string }>;
+      description?: string;
+      most_known_for?: string;
+      level_of_business?: 'high' | 'moderate' | 'low';
+    }
+  ) {
     const response = await this.api.put(`/locations/${locationId}`, data);
     return response.data;
   }
 
+  async deleteLocation(locationId: string) {
+    await this.api.delete(`/locations/${locationId}`);
+  }
+
+  // ===============================
   // Review endpoints
+  // ===============================
   async getReviews(locationId: string) {
     const response = await this.api.get(`/reviews/locations/${locationId}`);
     return response.data;
@@ -223,10 +336,7 @@ class ApiService {
   }
 
   async updateReview(reviewId: string, rating: number, reviewText?: string) {
-    const response = await this.api.put(`/reviews/${reviewId}`, {
-      rating,
-      review_text: reviewText,
-    });
+    const response = await this.api.put(`/reviews/${reviewId}`, { rating, review_text: reviewText });
     return response.data;
   }
 
@@ -235,7 +345,9 @@ class ApiService {
     return response.data;
   }
 
-  // Activity ratings (rate level of activity; 2h cooldown)
+  // ===============================
+  // Activity ratings
+  // ===============================
   async getLocationActivityRatings(locationId: string): Promise<{
     ratings: Array<{ level: string; created_at: string }>;
     can_rate: boolean;
@@ -253,7 +365,9 @@ class ApiService {
     return response.data;
   }
 
-  // Favorites endpoints
+  // ===============================
+  // Favorites
+  // ===============================
   async getFavorites() {
     const response = await this.api.get('/favorites');
     return response.data;
@@ -267,7 +381,9 @@ class ApiService {
     await this.api.delete(`/favorites/${locationId}`);
   }
 
+  // ===============================
   // Location request endpoints
+  // ===============================
   async getLocationRequests(status?: 'pending' | 'approved' | 'denied') {
     const params = status ? { status_filter: status } : {};
     const response = await this.api.get('/location-requests', { params });
@@ -287,16 +403,12 @@ class ApiService {
   }
 
   async approveLocationRequest(requestId: string, adminNotes?: string) {
-    const response = await this.api.put(`/location-requests/${requestId}/approve`, {
-      admin_notes: adminNotes,
-    });
+    const response = await this.api.put(`/location-requests/${requestId}/approve`, { admin_notes: adminNotes });
     return response.data;
   }
 
   async denyLocationRequest(requestId: string, adminNotes: string) {
-    const response = await this.api.put(`/location-requests/${requestId}/deny`, {
-      admin_notes: adminNotes,
-    });
+    const response = await this.api.put(`/location-requests/${requestId}/deny`, { admin_notes: adminNotes });
     return response.data;
   }
 
@@ -305,11 +417,11 @@ class ApiService {
     return response.data;
   }
 
-  async deleteLocation(locationId: string) {
-    await this.api.delete(`/locations/${locationId}`);
-  }
-
-  async updateRequestStatus(requestId: string, status: 'pending' | 'submitted' | 'approved' | 'denied', adminNotes?: string) {
+  async updateRequestStatus(
+    requestId: string,
+    status: 'pending' | 'submitted' | 'approved' | 'denied',
+    adminNotes?: string
+  ) {
     const response = await this.api.put(`/location-requests/${requestId}/status`, {
       status,
       admin_notes: adminNotes,
@@ -317,20 +429,25 @@ class ApiService {
     return response.data;
   }
 
-  async updateLocationRequest(requestId: string, data: {
-    name: string;
-    address: string;
-    description?: string;
-    pictures?: Array<{ url: string; caption?: string }>;
-    most_known_for?: string;
-    level_of_business?: 'high' | 'moderate' | 'low';
-    admin_notes?: string;
-  }) {
+  async updateLocationRequest(
+    requestId: string,
+    data: {
+      name: string;
+      address: string;
+      description?: string;
+      pictures?: Array<{ url: string; caption?: string }>;
+      most_known_for?: string;
+      level_of_business?: 'high' | 'moderate' | 'low';
+      admin_notes?: string;
+    }
+  ) {
     const response = await this.api.put(`/location-requests/${requestId}`, data);
     return response.data;
   }
 
+  // ===============================
   // User profile endpoints
+  // ===============================
   async getMyProfile() {
     const response = await this.api.get('/users/me');
     return response.data;
@@ -372,7 +489,9 @@ class ApiService {
     return response.data;
   }
 
-  // Announcements (admin: CRUD; students: read published only)
+  // ===============================
+  // Announcements
+  // ===============================
   async getAnnouncements() {
     const response = await this.api.get('/announcements');
     return response.data;
@@ -421,7 +540,6 @@ class ApiService {
     await this.api.delete(`/announcements/${announcementId}/comments/${commentId}`);
   }
 
-  // Announcement requests (students submit; admin approves/denies)
   async getAnnouncementRequests() {
     const response = await this.api.get('/announcement-requests');
     return response.data;
@@ -449,7 +567,9 @@ class ApiService {
     return response.data;
   }
 
-  // Events (admin: CRUD; students: read)
+  // ===============================
+  // Events
+  // ===============================
   async getEvents() {
     const response = await this.api.get('/events');
     return response.data;
@@ -467,14 +587,17 @@ class ApiService {
     return response.data;
   }
 
-  async patchEvent(eventId: string, data: {
-    event_name?: string;
-    location?: string;
-    top_qualities?: string;
-    description?: string;
-    picture?: string;
-    meeting_time?: string;
-  }) {
+  async patchEvent(
+    eventId: string,
+    data: {
+      event_name?: string;
+      location?: string;
+      top_qualities?: string;
+      description?: string;
+      picture?: string;
+      meeting_time?: string;
+    }
+  ) {
     const response = await this.api.patch(`/events/${eventId}`, data);
     return response.data;
   }
@@ -483,7 +606,6 @@ class ApiService {
     await this.api.delete(`/events/${eventId}`);
   }
 
-  // Event requests (students submit; admin approves/denies)
   async getEventRequests() {
     const response = await this.api.get('/event-requests');
     return response.data;
@@ -501,15 +623,18 @@ class ApiService {
     return response.data;
   }
 
-  async updateEventRequest(requestId: string, data: {
-    event_name?: string;
-    location?: string;
-    top_qualities?: string;
-    description?: string;
-    picture?: string;
-    meeting_time?: string;
-    admin_notes?: string;
-  }) {
+  async updateEventRequest(
+    requestId: string,
+    data: {
+      event_name?: string;
+      location?: string;
+      top_qualities?: string;
+      description?: string;
+      picture?: string;
+      meeting_time?: string;
+      admin_notes?: string;
+    }
+  ) {
     const response = await this.api.put(`/event-requests/${requestId}`, data);
     return response.data;
   }
@@ -527,9 +652,9 @@ class ApiService {
   }
 
   async deleteEventRequest(requestId: string) {
-    const response = await this.api.delete(`/event-requests/${requestId}`);
-    return response.data;
+    return (await this.api.delete(`/event-requests/${requestId}`)).data;
   }
 }
 
 export const apiService = new ApiService();
+export { API_BASE_URL };

@@ -19,6 +19,7 @@ import {
   Linking,
   PanResponder,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -28,6 +29,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Path, Line, Circle } from 'react-native-svg';
+import * as MediaLibrary from 'expo-media-library';
+
 
 const { width } = Dimensions.get('window');
 const CHART_W = Math.min(300, Math.max(220, Math.floor(width - 140)));
@@ -49,7 +52,8 @@ const SVG_H = PAD_T + CHART_H + PAD_B;
 const CARD_IMAGE_HEIGHT = 240;
 const MAX_LOCATION_NAME_LEN = 200;
 const MAX_QUALITIES = 6;
-const MAX_IMAGE_BYTES = 300_000;
+const MAX_IMAGE_BYTES = 8_000_000; 
+
 
 const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
   if (!asset) return '';
@@ -373,7 +377,7 @@ export default function PlacesScreen() {
   const [requestLocationDescription, setRequestLocationDescription] = useState('');
   const [requestLocationTopQualities, setRequestLocationTopQualities] = useState('');
   const [requestLocationLevel, setRequestLocationLevel] = useState<'high' | 'moderate' | 'low' | ''>('');
-  const [requestLocationImages, setRequestLocationImages] = useState<string[]>([]);
+  const [requestLocationImages, setRequestLocationImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [requestLocationSubmitting, setRequestLocationSubmitting] = useState(false);
 
   const requestLocationSwipeResponder = useMemo(
@@ -733,36 +737,9 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-  const buildPicturesFromUris = async (uris: string[], caption?: string) => {
-    if (!uris.length) return undefined;
-    let hadInvalid = false;
-    const pictures: Array<{ url: string; caption?: string }> = [];
-    for (const uri of uris) {
-      if (!uri || uri.startsWith('ph://') || uri.startsWith('file://')) {
-        hadInvalid = true;
-        continue;
-      }
-      if (uri.startsWith('data:')) {
-        try {
-          const uploaded = await apiService.uploadBase64Image(uri);
-          pictures.push({ url: uploaded, caption });
-        } catch {
-          hadInvalid = true;
-        }
-        continue;
-      }
-      if (uri.startsWith('http://') || uri.startsWith('https://')) {
-        pictures.push({ url: uri, caption });
-        continue;
-      }
-      hadInvalid = true;
-    }
+  
 
-    if (hadInvalid) {
-      Alert.alert('Image skipped', 'Some images were too large or unsupported.');
-    }
-    return pictures.length > 0 ? pictures : undefined;
-  };
+
 
   const removeRequestLocationImage = (index: number) => {
     setRequestLocationImages((prev) => prev.filter((_, i) => i !== index));
@@ -824,36 +801,76 @@ const countQualities = (text?: string) => {
     );
   };
 
-  const pickRequestLocationImages = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
+
+  const ensureFileUri = async (asset: ImagePicker.ImagePickerAsset) => {
+  if (!asset?.uri) return '';
+
+  // Android usually already file://
+  if (asset.uri.startsWith('file://')) return asset.uri;
+
+  // iOS often gives ph://
+  if (asset.assetId) {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        allowsMultipleSelection: false,
-        selectionLimit: 1,
-        aspect: [4, 3],
-        quality: 0.3,
-        base64: true,
-      });
-      if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets
-          .map((asset) => getPickerAssetUri(asset))
-          .filter(Boolean);
-        setRequestLocationImages((prev) => {
-          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-          return next.slice(0, 1);
-        });
-      }
-    } catch (error) {
-      console.warn('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick images. Please try again.');
+      const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+      if (info.localUri) return info.localUri; // file://...
+    } catch {
+      // ignore
     }
-  };
+  }
+
+  // fallback: return original uri
+  return asset.uri;
+};
+
+  
+
+  const pickRequestLocationImages = async () => {
+  const { status } = await MediaLibrary.requestPermissionsAsync();
+  if (status !== 'granted') {
+    Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
+    return;
+  }
+
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],            // ✅ FIX (no red underline)
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
+      quality: 0.8,
+      base64: true,                      // keep if your upload expects base64
+    });
+
+    if (result.canceled || !result.assets?.length) return;
+
+    // Resolve iOS ph:// -> file:// when possible (helps uploads)
+    const resolvedAssets: ImagePicker.ImagePickerAsset[] = [];
+    for (const a of result.assets) {
+      const uri = await ensureFileUri(a);
+      resolvedAssets.push({ ...a, uri });
+    }
+
+    setRequestLocationImages((prev) => {
+      const merged = [...prev];
+
+      for (const a of resolvedAssets) {
+        // de-dupe by uri
+        if (!merged.some((x) => x.uri === a.uri)) merged.push(a);
+      }
+
+      return merged.slice(0, 5);
+    });
+  } catch (error) {
+    console.warn('Image picker error:', error);
+    Alert.alert('Error', 'Failed to pick images. Please try again.');
+  }
+};
+
+
+
+
+  
+
 
   const handleSubmitLocationRequest = async () => {
     if (!requestLocationName.trim() || !requestLocationAddress.trim()) {
@@ -866,18 +883,16 @@ const countQualities = (text?: string) => {
     }
     setRequestLocationSubmitting(true);
     try {
-      const pictures = await buildPicturesFromUris(
-        requestLocationImages,
-        requestLocationTopQualities.trim() || undefined
-      );
+      
+      const uploaded = await apiService.uploadLocationImages(requestLocationImages);
       await apiService.createLocationRequest({
         name: requestLocationName.trim(),
         address: requestLocationAddress.trim(),
         description: requestLocationDescription.trim() || undefined,
         most_known_for: requestLocationTopQualities.trim() || undefined,
         level_of_business: requestLocationLevel || undefined,
-        pictures,
-      });
+        pictures: uploaded, // [{ url }]
+});
       Alert.alert('Submitted', 'Your location request was sent. An admin will review it.');
       setShowRequestLocationModal(false);
       setRequestLocationName('');
@@ -1200,37 +1215,58 @@ const countQualities = (text?: string) => {
                     {requestLocationImages.length > 0 ? 'Add More Photos' : 'Choose from Camera Roll'}
                   </ThemedText>
                 </TouchableOpacity>
-                {requestLocationImages.length > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.requestImagePreviewRow}>
-                    {requestLocationImages.map((uri, idx) => (
-                      <View key={`${uri}-${idx}`} style={styles.requestImageThumbWrap}>
-                        <Image source={{ uri }} style={styles.requestImagePreviewThumb} />
-                        <View style={styles.requestImageActions}>
-                          <TouchableOpacity
-                            style={styles.requestImageActionButton}
-                            onPress={() => moveRequestLocationImage(idx, 'left')}
-                            disabled={idx === 0}
-                            activeOpacity={0.7}>
-                            <ThemedText style={styles.requestImageActionText}>‹</ThemedText>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.requestImageActionButton}
-                            onPress={() => moveRequestLocationImage(idx, 'right')}
-                            disabled={idx === requestLocationImages.length - 1}
-                            activeOpacity={0.7}>
-                            <ThemedText style={styles.requestImageActionText}>›</ThemedText>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.requestImageActionButton, styles.requestImageRemoveButton]}
-                            onPress={() => removeRequestLocationImage(idx)}
-                            activeOpacity={0.7}>
-                            <ThemedText style={styles.requestImageActionText}>✕</ThemedText>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    ))}
-                  </ScrollView>
-                ) : null}
+             {requestLocationImages.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.requestImagePreviewRow}
+              >
+                {requestLocationImages.map((asset, idx) => (
+                  <View key={`${asset.uri}-${idx}`} style={styles.requestImageThumbWrap}>
+                    <Image
+                      source={{ uri: asset.uri }}
+                      style={styles.requestImagePreviewThumb}
+                    />
+
+                    <View style={styles.requestImageActions}>
+                      <TouchableOpacity
+                        style={styles.requestImageActionButton}
+                        onPress={() => moveRequestLocationImage(idx, 'left')}
+                        disabled={idx === 0}
+                        activeOpacity={0.7}
+                      >
+                        <ThemedText style={styles.requestImageActionText}>‹</ThemedText>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.requestImageActionButton}
+                        onPress={() => moveRequestLocationImage(idx, 'right')}
+                        disabled={idx === requestLocationImages.length - 1}
+                        activeOpacity={0.7}
+                      >
+                        <ThemedText style={styles.requestImageActionText}>›</ThemedText>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.requestImageActionButton, styles.requestImageRemoveButton]}
+                        onPress={() => removeRequestLocationImage(idx)}
+                        activeOpacity={0.7}
+                      >
+                        <ThemedText style={styles.requestImageActionText}>✕</ThemedText>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : null}
+
+
+
+
+
+
+
+
               </View>
 
               <TouchableOpacity
