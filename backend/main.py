@@ -43,7 +43,11 @@ app.include_router(events.router)
 app.include_router(favorites.router)
 app.include_router(uploads.router)
 
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)  # ✅ make sure it exists
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
 
 
 @app.get("/health")
