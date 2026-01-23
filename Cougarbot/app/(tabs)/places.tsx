@@ -55,19 +55,7 @@ const MAX_QUALITIES = 6;
 const MAX_IMAGE_BYTES = 8_000_000; 
 
 
-const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
-  if (!asset) return '';
-  if (asset.base64) {
-    const approxBytes = Math.floor((asset.base64.length * 3) / 4);
-    if (approxBytes > MAX_IMAGE_BYTES) {
-      Alert.alert('Image too large', 'Please choose a smaller image.');
-      return '';
-    }
-    const mimeType = asset.mimeType || 'image/jpeg';
-    return `data:${mimeType};base64,${asset.base64}`;
-  }
-  return asset.uri;
-};
+
 
 interface LocationPicture {
   url: string;
@@ -833,7 +821,7 @@ const countQualities = (text?: string) => {
 
   try {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],            // ✅ FIX (no red underline)
+      mediaTypes: ['images'],
       allowsEditing: false,
       allowsMultipleSelection: true,
       selectionLimit: 5,
@@ -849,6 +837,7 @@ const countQualities = (text?: string) => {
       const uri = await ensureFileUri(a);
       resolvedAssets.push({ ...a, uri });
     }
+    setRequestLocationImages(resolvedAssets);
 
     setRequestLocationImages((prev) => {
       const merged = [...prev];
@@ -1397,8 +1386,15 @@ const countQualities = (text?: string) => {
                               await apiService.submitLocationActivityRating(selectedLocation.id, lvl);
                               await loadActivityRatings(selectedLocation.id);
                             } catch (e: any) {
-                              const msg = e?.response?.data?.detail || e?.message || 'Failed to submit';
+                              const status = e?.response?.status;
+                              const data = e?.response?.data;
+                              const msg = data?.detail ?? data?.message ??(typeof data === 'string' ? data : null) ?? e?.message ??'Failed to submit request';
+                              console.log('createLocationRequest error:', { status, data, raw: e });
                               Alert.alert('Error', msg);
+                              
+
+
+                              
                             } finally {
                               setActivityRateSubmitting(false);
                             }

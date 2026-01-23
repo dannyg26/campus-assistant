@@ -14,7 +14,7 @@ router = APIRouter(prefix="/events", tags=["events"])
 
 
 class CreateEventRequest(BaseModel):
-    event_name: str = Field(min_length=1, max_length=20)
+    event_name: str = Field(min_length=1, max_length=500)
     location: Optional[str] = None
     top_qualities: Optional[str] = None
     description: Optional[str] = None
@@ -23,7 +23,7 @@ class CreateEventRequest(BaseModel):
 
 
 class PatchEventRequest(BaseModel):
-    event_name: Optional[str] = Field(None, min_length=1, max_length=20)
+    event_name: Optional[str] = Field(None, min_length=1, max_length=500)
     location: Optional[str] = None
     top_qualities: Optional[str] = None
     description: Optional[str] = None

@@ -25,13 +25,13 @@ router = APIRouter(prefix="/announcements", tags=["announcements"])
 # ---------------------------------------------------------------------------
 
 class CreateAnnouncementRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=20)
+    title: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1)
     image: Optional[str] = None
 
 
 class PatchAnnouncementRequest(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=20)
+    title: Optional[str] = Field(None, min_length=1, max_length=500)
     body: Optional[str] = Field(None, min_length=1)
     status: Optional[Literal["draft", "published"]] = None
     image: Optional[str] = None
