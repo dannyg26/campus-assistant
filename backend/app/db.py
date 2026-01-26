@@ -203,13 +203,20 @@ announcements = Table(
     Column("org_id", String, ForeignKey("organizations.id"), nullable=False, index=True),
     Column("title", String(500), nullable=False),
     Column("body", Text, nullable=False),
-    Column("image", Text, nullable=True),  # optional image URL or base64
+
+    # NEW: JSON array of {url, caption?}
+    Column("pictures", Text, nullable=True),
+
+    # Keep legacy single-image field for backward compatibility
+    Column("image", Text, nullable=True),
+
     Column("status", String(20), nullable=False, default="draft"),  # 'draft' | 'published'
     Column("created_by_user_id", String, ForeignKey("users.id"), nullable=False, index=True),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=True),
     Column("published_at", String, nullable=True),
 )
+
 
 # ---- Announcement Requests (students request; admin approves/denies)
 announcement_requests = Table(
@@ -220,13 +227,21 @@ announcement_requests = Table(
     Column("requested_by", String, ForeignKey("users.id"), nullable=False, index=True),
     Column("title", String(500), nullable=False),
     Column("body", Text, nullable=False),
+
+    # NEW: JSON array of {url, caption?}
+    Column("pictures", Text, nullable=True),
+
+    # Keep legacy single-image field for backward compatibility
     Column("image", Text, nullable=True),
+
     Column("status", String(20), nullable=False, default="pending"),  # 'pending' | 'approved' | 'denied'
     Column("created_at", String, nullable=False),
     Column("reviewed_by", String, ForeignKey("users.id"), nullable=True),
     Column("reviewed_at", String, nullable=True),
     Column("admin_notes", Text, nullable=True),
 )
+
+
 
 # ---- Announcement Comments (students on published only; admin or owner can delete)
 announcement_comments = Table(
@@ -239,6 +254,31 @@ announcement_comments = Table(
     Column("body", Text, nullable=False),
     Column("created_at", String, nullable=False),
 )
+
+announcement_images = Table(
+    "announcement_images",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("announcement_id", String, ForeignKey("announcements.id"), nullable=False, index=True),
+    Column("url", Text, nullable=False),
+    Column("caption", Text, nullable=True),
+    Column("position", String(10), nullable=True),  # store as string for consistency if you want
+    Column("created_at", String, nullable=False),
+)
+Index("ix_annou2ww2ncement_images_announcement_id", announcement_images.c.announcement_id)
+
+event_images = Table(
+    "event_images",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("event_id", String, ForeignKey("events.id"), nullable=False, index=True),
+    Column("url", Text, nullable=False),
+    Column("caption", Text, nullable=True),
+    Column("position", String(10), nullable=True),
+    Column("created_at", String, nullable=False),
+)
+Index("ix_event_images_event_id", event_images.c.event_id)
+
 
 # ---- Event Requests (students request; admin approves/denies; similar to announcement_requests)
 event_requests = Table(
@@ -259,6 +299,20 @@ event_requests = Table(
     Column("reviewed_at", String, nullable=True),
     Column("admin_notes", Text, nullable=True),
 )
+
+
+event_request_images = Table(
+    "event_request_images",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("request_id", String, ForeignKey("event_requests.id"), nullable=False, index=True),
+    Column("url", Text, nullable=False),
+    Column("caption", Text, nullable=True),
+    Column("position", String(10), nullable=True),
+    Column("created_at", String, nullable=False),
+)
+Index("ix_event_request_images_request_id", event_request_images.c.request_id)
+
 
 # ---- Events (approved/published; admin can also create directly)
 events = Table(

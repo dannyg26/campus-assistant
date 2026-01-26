@@ -7,10 +7,26 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, insert, select, update
 
-from app.db import event_requests, events, get_conn, new_id, users, utcnow_iso
+from app.db import (
+    event_requests,
+    event_request_images,
+    events,
+    get_conn,
+    new_id,
+    users,
+    utcnow_iso,
+)
 from app.deps import CurrentUser, get_current_user, require_admin
 
 router = APIRouter(prefix="/event-requests", tags=["event-requests"])
+
+
+# ----------------------------
+# Schemas
+# ----------------------------
+class PictureIn(BaseModel):
+    url: str = Field(min_length=1)
+    caption: Optional[str] = None
 
 
 class CreateEventRequestRequest(BaseModel):
@@ -18,7 +34,13 @@ class CreateEventRequestRequest(BaseModel):
     location: Optional[str] = None
     top_qualities: Optional[str] = None
     description: Optional[str] = None
+
+    # NEW
+    pictures: list[PictureIn] = Field(default_factory=list)
+
+    # Backward-compat
     picture: Optional[str] = None
+
     meeting_time: Optional[str] = None
 
 
@@ -27,7 +49,13 @@ class UpdateEventRequestRequest(BaseModel):
     location: Optional[str] = None
     top_qualities: Optional[str] = None
     description: Optional[str] = None
+
+    # NEW: if provided it replaces (or clears) request images
+    pictures: Optional[list[PictureIn]] = None
+
+    # Backward-compat
     picture: Optional[str] = None
+
     meeting_time: Optional[str] = None
     admin_notes: Optional[str] = None
 
@@ -47,7 +75,13 @@ class EventRequestResponse(BaseModel):
     location: Optional[str] = None
     top_qualities: Optional[str] = None
     description: Optional[str] = None
+
+    # NEW
+    pictures: list[PictureIn] = Field(default_factory=list)
+
+    # Backward-compat
     picture: Optional[str] = None
+
     meeting_time: Optional[str] = None
     status: str
     requested_by: str
@@ -58,6 +92,9 @@ class EventRequestResponse(BaseModel):
     admin_notes: Optional[str] = None
 
 
+# ----------------------------
+# Helpers
+# ----------------------------
 def _count_qualities(text: Optional[str]) -> int:
     if not text:
         return 0
@@ -69,17 +106,53 @@ def _ensure_qualities_limit(text: Optional[str]) -> None:
         raise HTTPException(status_code=400, detail="Top qualities can have at most 6 items.")
 
 
-def _row_to_response(conn, r, requester_name=None) -> EventRequestResponse:
+def _get_request_pictures(conn, request_id: str) -> list[PictureIn]:
+    rows = (
+        conn.execute(
+            select(event_request_images)
+            .where(event_request_images.c.request_id == request_id)
+            .order_by(event_request_images.c.position.asc().nulls_last(), event_request_images.c.created_at.asc())
+        )
+        .mappings()
+        .all()
+    )
+    return [PictureIn(url=str(r["url"]), caption=str(r["caption"]) if r.get("caption") else None) for r in rows]
+
+
+def _replace_request_pictures(conn, request_id: str, pictures: list[PictureIn]) -> None:
+    conn.execute(delete(event_request_images).where(event_request_images.c.request_id == request_id))
+    now = utcnow_iso()
+    for i, p in enumerate(pictures):
+        conn.execute(
+            insert(event_request_images).values(
+                id=new_id(),
+                request_id=request_id,
+                url=p.url.strip(),
+                caption=p.caption.strip() if p.caption else None,
+                position=i,
+                created_at=now,
+            )
+        )
+
+
+def _row_to_response(conn, r, requester_name: Optional[str] = None) -> EventRequestResponse:
     if requester_name is None:
         q = conn.execute(select(users.c.name).where(users.c.id == r["requested_by"])).mappings().first()
         requester_name = str(q["name"]) if q else None
+
+    pics = _get_request_pictures(conn, str(r["id"]))
+    legacy_picture = str(r["picture"]) if r.get("picture") else None
+    if legacy_picture and not pics:
+        pics = [PictureIn(url=legacy_picture, caption=None)]
+
     return EventRequestResponse(
         id=str(r["id"]),
         event_name=str(r["event_name"]),
         location=str(r["location"]) if r.get("location") else None,
         top_qualities=str(r["top_qualities"]) if r.get("top_qualities") else None,
         description=str(r["description"]) if r.get("description") else None,
-        picture=str(r["picture"]) if r.get("picture") else None,
+        pictures=pics,
+        picture=legacy_picture,
         meeting_time=str(r["meeting_time"]) if r.get("meeting_time") else None,
         status=str(r["status"]),
         requested_by=str(r["requested_by"]),
@@ -91,6 +164,9 @@ def _row_to_response(conn, r, requester_name=None) -> EventRequestResponse:
     )
 
 
+# ----------------------------
+# Routes
+# ----------------------------
 @router.post("", response_model=EventRequestResponse, status_code=status.HTTP_201_CREATED)
 def create_event_request(
     req: CreateEventRequestRequest,
@@ -99,6 +175,7 @@ def create_event_request(
     rid = new_id()
     now = utcnow_iso()
     _ensure_qualities_limit(req.top_qualities)
+
     with get_conn() as conn, conn.begin():
         conn.execute(
             insert(event_requests).values(
@@ -109,28 +186,21 @@ def create_event_request(
                 location=req.location.strip() if req.location else None,
                 top_qualities=req.top_qualities.strip() if req.top_qualities else None,
                 description=req.description.strip() if req.description else None,
-                picture=req.picture if req.picture else None,
+                picture=req.picture if req.picture else None,  # legacy
                 meeting_time=req.meeting_time.strip() if req.meeting_time else None,
                 status="pending",
                 created_at=now,
             )
         )
-    return EventRequestResponse(
-        id=rid,
-        event_name=req.event_name.strip(),
-        location=req.location.strip() if req.location else None,
-        top_qualities=req.top_qualities.strip() if req.top_qualities else None,
-        description=req.description.strip() if req.description else None,
-        picture=req.picture,
-        meeting_time=req.meeting_time.strip() if req.meeting_time else None,
-        status="pending",
-        requested_by=user.user_id,
-        requested_by_name=user.name,
-        created_at=now,
-        reviewed_by=None,
-        reviewed_at=None,
-        admin_notes=None,
-    )
+
+        pics = req.pictures or []
+        if pics:
+            _replace_request_pictures(conn, rid, pics)
+        elif req.picture:
+            _replace_request_pictures(conn, rid, [PictureIn(url=req.picture, caption=None)])
+
+        r = conn.execute(select(event_requests).where(event_requests.c.id == rid)).mappings().first()
+        return _row_to_response(conn, r, user.name)
 
 
 @router.get("", response_model=list[EventRequestResponse])
@@ -152,12 +222,17 @@ def update_event_request(
 ) -> EventRequestResponse:
     with get_conn() as conn, conn.begin():
         _ensure_qualities_limit(req.top_qualities)
-        row = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
+
+        row = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == admin.org_id,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event request not found")
         if str(row["status"]) != "pending":
@@ -173,7 +248,7 @@ def update_event_request(
         if req.description is not None:
             vals["description"] = req.description.strip() if req.description else None
         if req.picture is not None:
-            vals["picture"] = req.picture if req.picture else None
+            vals["picture"] = req.picture if req.picture else None  # legacy
         if req.meeting_time is not None:
             vals["meeting_time"] = req.meeting_time.strip() if req.meeting_time else None
         if req.admin_notes is not None:
@@ -181,18 +256,33 @@ def update_event_request(
 
         if vals:
             conn.execute(
-                update(event_requests).where(
-                    event_requests.c.id == request_id,
-                    event_requests.c.org_id == admin.org_id,
-                ).values(**vals)
+                update(event_requests)
+                .where(event_requests.c.id == request_id, event_requests.c.org_id == admin.org_id)
+                .values(**vals)
             )
 
-        r = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
+        # NEW: pictures replace/clear when provided
+        if req.pictures is not None:
+            _replace_request_pictures(conn, request_id, req.pictures)
+
+            # Optional: keep legacy column aligned
+            first = req.pictures[0].url if req.pictures else None
+            conn.execute(
+                update(event_requests)
+                .where(event_requests.c.id == request_id, event_requests.c.org_id == admin.org_id)
+                .values(picture=first)
             )
-        ).mappings().first()
+
+        r = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == admin.org_id,
+                )
+            )
+            .mappings()
+            .first()
+        )
         return _row_to_response(conn, r)
 
 
@@ -202,12 +292,16 @@ def approve_event_request(
     admin: CurrentUser = Depends(require_admin),
 ) -> ApproveEventResponse:
     with get_conn() as conn, conn.begin():
-        row = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
+        row = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == admin.org_id,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event request not found")
         if str(row["status"]) != "pending":
@@ -215,6 +309,8 @@ def approve_event_request(
 
         eid = new_id()
         now = utcnow_iso()
+
+        # Create event
         conn.execute(
             insert(events).values(
                 id=eid,
@@ -223,14 +319,48 @@ def approve_event_request(
                 location=row.get("location"),
                 top_qualities=row.get("top_qualities"),
                 description=row.get("description"),
-                picture=row.get("picture"),
+                picture=row.get("picture"),  # legacy
                 meeting_time=row.get("meeting_time"),
                 created_by_user_id=admin.user_id,
                 created_at=now,
                 updated_at=now,
             )
         )
-        conn.execute(delete(event_requests).where(event_requests.c.id == request_id))
+
+        # Copy request images -> event_images
+        req_pics = _get_request_pictures(conn, request_id)
+        if req_pics:
+            # Import here to avoid circular imports if you prefer, but app.db usually is fine
+            from app.db import event_images
+
+            for i, p in enumerate(req_pics):
+                conn.execute(
+                    insert(event_images).values(
+                        id=new_id(),
+                        event_id=eid,
+                        url=p.url.strip(),
+                        caption=p.caption.strip() if p.caption else None,
+                        position=i,
+                        created_at=now,
+                    )
+                )
+            # Align legacy column with first image if not set
+            if not row.get("picture"):
+                conn.execute(
+                    update(events)
+                    .where(events.c.id == eid, events.c.org_id == admin.org_id)
+                    .values(picture=req_pics[0].url)
+                )
+
+        # Delete request and its images
+        conn.execute(delete(event_request_images).where(event_request_images.c.request_id == request_id))
+        conn.execute(
+            delete(event_requests).where(
+                event_requests.c.id == request_id,
+                event_requests.c.org_id == admin.org_id,
+            )
+        )
+
         return ApproveEventResponse(event_id=eid)
 
 
@@ -242,12 +372,16 @@ def deny_event_request(
 ) -> EventRequestResponse:
     now = utcnow_iso()
     with get_conn() as conn, conn.begin():
-        row = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
+        row = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == admin.org_id,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event request not found")
         if str(row["status"]) != "pending":
@@ -255,10 +389,7 @@ def deny_event_request(
 
         conn.execute(
             update(event_requests)
-            .where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
-            )
+            .where(event_requests.c.id == request_id, event_requests.c.org_id == admin.org_id)
             .values(
                 status="denied",
                 reviewed_by=admin.user_id,
@@ -268,12 +399,16 @@ def deny_event_request(
         )
 
     with get_conn() as conn:
-        r = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == admin.org_id,
+        r = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == admin.org_id,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         return _row_to_response(conn, r)
 
 
@@ -284,16 +419,24 @@ def delete_event_request(
 ) -> None:
     """Delete an event request (admin or owner)."""
     with get_conn() as conn, conn.begin():
-        row = conn.execute(
-            select(event_requests).where(
-                event_requests.c.id == request_id,
-                event_requests.c.org_id == user.org_id,
+        row = (
+            conn.execute(
+                select(event_requests).where(
+                    event_requests.c.id == request_id,
+                    event_requests.c.org_id == user.org_id,
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if not row:
             raise HTTPException(status_code=404, detail="Event request not found")
         if user.role != "admin" and str(row["requested_by"]) != user.user_id:
             raise HTTPException(status_code=403, detail="You can only delete your own requests")
+
+        # delete images too
+        conn.execute(delete(event_request_images).where(event_request_images.c.request_id == request_id))
+
         conn.execute(
             delete(event_requests).where(
                 event_requests.c.id == request_id,

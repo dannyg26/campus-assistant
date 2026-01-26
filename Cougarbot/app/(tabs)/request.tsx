@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   View,
   TextInput,
@@ -15,21 +15,25 @@ import {
   PanResponder,
   Animated,
   Dimensions,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { apiService } from '@/services/api';
-import { useAuth } from '@/contexts/AuthContext';
-import { useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ThemedText } from "@/components/themed-text";
+import { ThemedView } from "@/components/themed-view";
+import { IconSymbol } from "@/components/ui/icon-symbol";
+import { apiService } from "@/services/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "expo-router";
+
+import {
+  pickImagesBase64,
+  getPickerAssetDataUri,
+  getPickerAssetDataUris,
+} from "../../utils/imagePicker";
 
 const MAX_LOCATION_NAME_LEN = 200;
 const MAX_EVENT_NAME_LEN = 500;
 const MAX_ANNOUNCEMENT_TITLE_LEN = 500;
 const MAX_QUALITIES = 6;
-const MAX_IMAGE_BYTES = 300_000;
 
 const countQualities = (text?: string) => {
   if (!text) return 0;
@@ -39,73 +43,15 @@ const countQualities = (text?: string) => {
     .filter(Boolean).length;
 };
 
-const buildPicturesFromUris = async (uris: string[], caption?: string) => {
-  if (!uris.length) return undefined;
-  const pictures: Array<{ url: string; caption?: string }> = [];
-  let hadInvalid = false;
-  for (const uri of uris) {
-    if (!uri || uri.startsWith('ph://') || uri.startsWith('file://')) {
-      hadInvalid = true;
-      continue;
-    }
-    if (uri.startsWith('data:')) {
-      try {
-        const uploaded = await apiService.uploadBase64Image(uri);
-        pictures.push({ url: uploaded, caption });
-      } catch {
-        hadInvalid = true;
-      }
-      continue;
-    }
-    if (uri.startsWith('http://') || uri.startsWith('https://')) {
-      pictures.push({ url: uri, caption });
-      continue;
-    }
-    hadInvalid = true;
-  }
-  if (hadInvalid) {
-    Alert.alert('Image skipped', 'Some images were too large or unsupported.');
-  }
-  return pictures.length > 0 ? pictures : undefined;
-};
-
-const getPickerAssetUri = (asset: ImagePicker.ImagePickerAsset) => {
-  if (!asset) return '';
-  if (asset.base64) {
-    const approxBytes = Math.floor((asset.base64.length * 3) / 4);
-    if (approxBytes > MAX_IMAGE_BYTES) {
-      Alert.alert('Image too large', 'Please choose a smaller image.');
-      return '';
-    }
-    const mimeType = asset.mimeType || 'image/jpeg';
-    return `data:${mimeType};base64,${asset.base64}`;
-  }
-  return asset.uri;
-};
-
-const uploadImageIfNeeded = async (image: string | null | undefined) => {
-  if (!image) return undefined;
-  if (image.startsWith('data:')) {
-    return await apiService.uploadBase64Image(image);
-  }
-  if (image.startsWith('http://') || image.startsWith('https://')) {
-    return image;
-  }
-  if (image.startsWith('ph://') || image.startsWith('file://')) {
-    Alert.alert('Image not ready', 'Please reselect the image.');
-    return undefined;
-  }
-  return image;
-};
-
-const moveImage = (list: string[], index: number, direction: 'left' | 'right') => {
+const moveImage = (list: string[], index: number, direction: "left" | "right") => {
   const next = [...list];
-  const targetIndex = direction === 'left' ? index - 1 : index + 1;
+  const targetIndex = direction === "left" ? index - 1 : index + 1;
   if (targetIndex < 0 || targetIndex >= next.length) return list;
   const [moved] = next.splice(index, 1);
   next.splice(targetIndex, 0, moved);
   return next;
 };
+
 interface LocationRequest {
   id: string;
   name: string;
@@ -113,14 +59,117 @@ interface LocationRequest {
   pictures?: Array<{ url: string; caption?: string }>;
   description?: string;
   most_known_for?: string;
-  level_of_business?: 'high' | 'moderate' | 'low';
+  level_of_business?: "high" | "moderate" | "low";
   requested_by: string;
   requested_by_name: string;
   requested_by_email: string;
-  status: 'pending' | 'submitted' | 'approved' | 'denied';
+  status: "pending" | "submitted" | "approved" | "denied";
   admin_notes?: string;
   created_at: string;
 }
+
+/**
+ * Picks images and returns DATA URIs only.
+ * These are safe to upload on iOS/Android (handles ph://).
+ */
+async function pickDataUrisOrAlert(): Promise<string[]> {
+  try {
+    const assets = await pickImagesBase64();
+    if (!assets.length) return [];
+    return getPickerAssetDataUris(assets);
+  } catch (e: any) {
+    Alert.alert("Image error", e?.message ?? "Could not pick images.");
+    return [];
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * Upload DATA URIs and return backend picture objects:
+ *   [{ url: "https://..." , caption?: "..." }]
+ *
+ * NOTE: This assumes apiService.buildPicturesFromUris accepts data: URIs.
+ */
+async function uploadPicturesFromPicker(caption?: string) {
+  const dataUris = await pickDataUrisOrAlert();
+  if (!dataUris.length) return undefined;
+
+  try {
+    // RECOMMENDED: centralize uploads in apiService, not in screen files.
+    const pictures = await apiService.buildPicturesFromUris(dataUris, caption);
+    return pictures?.length ? pictures : undefined;
+  } catch (e: any) {
+    Alert.alert("Upload failed", e?.message ?? "Could not upload images.");
+    return undefined;
+  }
+}
+
+
+
+// ---------- Image helpers (single + multi) ----------
+
+async function pickOneDataUriOrNull(): Promise<string | null> {
+  try {
+    const assets = await pickImagesBase64(); // allows multiple, but user may pick 1
+    if (!assets.length) return null;
+    return getPickerAssetDataUri(assets[0]);
+  } catch (e: any) {
+    Alert.alert("Image error", e?.message ?? "Could not pick image.");
+    return null;
+  }
+}
+
+async function pickManyDataUris(max = 8): Promise<string[]> {
+  try {
+    const assets = await pickImagesBase64();
+    if (!assets.length) return [];
+    return getPickerAssetDataUris(assets).slice(0, max);
+  } catch (e: any) {
+    Alert.alert("Image error", e?.message ?? "Could not pick images.");
+    return [];
+  }
+}
+
+/**
+ * Upload a single image if it's a data: URI. If it's already http(s), keep it.
+ * If null/empty, return null.
+ */
+async function uploadImageIfNeeded(uri: string | null): Promise<string | null> {
+  if (!uri) return null;
+  if (uri.startsWith("http://") || uri.startsWith("https://")) return uri;
+  if (uri.startsWith("data:")) return await apiService.uploadBase64Image(uri);
+  return null;
+}
+
+
+
+
+/**
+ * Build pictures[] from a list of uris where each uri is either:
+ *  - data:... (needs upload)
+ *  - https://... (already uploaded)
+ */
+async function buildPicturesFromUris(uris: string[], caption?: string) {
+  // Delegate to apiService (your earlier plan)
+  return apiService.buildPicturesFromUris(uris, caption);
+}
+
+
+
+
 
 type ManagePageType =
   | 'menu'
@@ -257,7 +306,7 @@ export default function RequestScreen() {
   const [description, setDescription] = useState('');
   const [topQualities, setTopQualities] = useState('');
   const [levelOfBusiness, setLevelOfBusiness] = useState<'high' | 'moderate' | 'low' | ''>('');
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [studentAnnouncementTitle, setStudentAnnouncementTitle] = useState('');
   const [studentAnnouncementBody, setStudentAnnouncementBody] = useState('');
   const [studentAnnouncementImage, setStudentAnnouncementImage] = useState<string | null>(null);
@@ -267,9 +316,15 @@ export default function RequestScreen() {
   const [studentEventDescription, setStudentEventDescription] = useState('');
   const [studentEventMeetingTime, setStudentEventMeetingTime] = useState('');
   const [studentEventImage, setStudentEventImage] = useState<string | null>(null);
+  
 
   // For now, check if admin - this should come from AuthContext user object
   const userIsAdmin = user?.role === 'admin';
+
+  const pickEditImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setEditSelectedImage(uri);
+};
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -419,39 +474,40 @@ export default function RequestScreen() {
     setShowLocationDetailModal(true);
   };
 
-  const pickEditLocationImages = async () => {
-    // Request permission
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
+const pickEditLocationImages = async () => {
+  const dataUris = await pickManyDataUris(8);
+  if (!dataUris.length) return;
 
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        allowsMultipleSelection: true,
-        selectionLimit: 8,
-        aspect: [4, 3],
-        quality: 0.3,
-        base64: true,
-      });
+  setEditLocationSelectedImages((prev) => {
+    const next = [...prev, ...dataUris.filter((u) => !prev.includes(u))];
+    return next.slice(0, 8);
+  });
+};
 
-      if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets
-          .map((asset) => getPickerAssetUri(asset))
-          .filter(Boolean);
-        setEditLocationSelectedImages((prev) => {
-          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-          return next.slice(0, 8);
-        });
-      }
-    } catch (error) {
-      console.warn('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick images. Please try again.');
-    }
-  };
+const pickNewLocationImages = async () => {
+  const dataUris = await pickManyDataUris(8);
+  if (!dataUris.length) return;
+
+  setNewLocationSelectedImages((prev) => {
+    const next = [...prev, ...dataUris.filter((u) => !prev.includes(u))];
+    return next.slice(0, 8);
+  });
+};
+
+const pickImagesForLocationRequest = async () => {
+  const dataUris = await pickManyDataUris(8);
+  if (!dataUris.length) return;
+
+  setSelectedImages((prev) => {
+    const next = [...prev, ...dataUris.filter((u) => !prev.includes(u))];
+    return next.slice(0, 8);
+  });
+};
+
+
+
+
+
 
   const handleUpdateLocation = async () => {
     if (!selectedLocation) return;
@@ -472,6 +528,12 @@ export default function RequestScreen() {
         editLocationTopQualities.trim() || undefined
       );
 
+
+
+
+
+
+
       await apiService.updateLocation(selectedLocation.id, {
         name: editLocationName.trim(),
         address: editLocationAddress.trim(),
@@ -487,40 +549,6 @@ export default function RequestScreen() {
       Alert.alert('Error', error.response?.data?.detail || 'Failed to update location');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const pickNewLocationImages = async () => {
-    // Request permission
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        allowsMultipleSelection: true,
-        selectionLimit: 8,
-        aspect: [4, 3],
-        quality: 0.3,
-        base64: true,
-      });
-
-      if (!result.canceled && result.assets?.length) {
-        const selectedUris = result.assets
-          .map((asset) => getPickerAssetUri(asset))
-          .filter(Boolean);
-        setNewLocationSelectedImages((prev) => {
-          const next = [...prev, ...selectedUris.filter((uri) => !prev.includes(uri))];
-          return next.slice(0, 8);
-        });
-      }
-    } catch (error) {
-      console.warn('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick images. Please try again.');
     }
   };
 
@@ -622,26 +650,6 @@ export default function RequestScreen() {
     }
   };
 
-  const pickNewEventImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.3,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setNewEventImage(imageUri);
-      }
-    }
-  };
 
   const handleCreateEvent = async () => {
     if (!newEventName.trim()) {
@@ -691,26 +699,7 @@ export default function RequestScreen() {
     setShowEditEventRequestModal(true);
   };
 
-  const pickEditEventRequestImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.3,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setEditEventImage(imageUri);
-      }
-    }
-  };
+
 
   const handleSaveEventRequest = async () => {
     if (!selectedEventRequest) return;
@@ -804,26 +793,7 @@ export default function RequestScreen() {
     setShowEditPostedEventModal(true);
   };
 
-  const pickEditPostedEventImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.3,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setEditPostedEventImage(imageUri);
-      }
-    }
-  };
+  
 
   const handleUpdatePostedEvent = async () => {
     if (!selectedPostedEvent) return;
@@ -935,91 +905,11 @@ export default function RequestScreen() {
     setShowEditMemberModal(true);
   };
 
-  const pickEditMemberImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.3,
-      base64: true,
-    });
 
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setEditMemberProfilePic(imageUri);
-      }
-    }
-  };
 
-  const pickNewAnnouncementImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.3,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setNewAnnouncementImage(imageUri);
-      }
-    }
-  };
 
-  const pickEditAnnouncementImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setEditAnnouncementImage(imageUri);
-      }
-    }
-  };
 
-  const pickImageForOrgSettings = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.3,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setOrgProfilePicForSettings(imageUri);
-      }
-    }
-  };
 
   const handleUpdateMember = async () => {
     if (!selectedMember) return;
@@ -1060,105 +950,100 @@ export default function RequestScreen() {
     }
   };
 
-  const pickImage = async () => {
-    // Request permission
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6,
-      base64: true,
-    });
+  
 
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setSelectedImage(imageUri);
-      }
-    }
-  };
+
+
+
 
   const pickStudentAnnouncementImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.4,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setStudentAnnouncementImage(result.assets[0].uri);
-    }
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setStudentAnnouncementImage(uri);
   };
 
   const pickStudentEventImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.4,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setStudentEventImage(result.assets[0].uri);
-    }
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setStudentEventImage(uri);
   };
+
+  const pickNewEventImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setNewEventImage(uri);
+  };
+
+  const pickEditEventRequestImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setEditEventImage(uri);
+  };
+
+  const pickEditPostedEventImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setEditPostedEventImage(uri);
+  };
+
+  const pickNewAnnouncementImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setNewAnnouncementImage(uri);
+  };
+
+  const pickEditAnnouncementImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setEditAnnouncementImage(uri);
+  };
+
+  const pickEditMemberImage = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setEditMemberProfilePic(uri);
+  };
+
+  const pickImageForOrgSettings = async () => {
+    const uri = await pickOneDataUriOrNull();
+    if (uri) setOrgProfilePicForSettings(uri);
+  };
+
+
+  
+
+ 
+
+  
 
   const handleSubmitRequest = async () => {
-    if (!name.trim() || !address.trim()) {
-      Alert.alert('Error', 'Please fill in name and address');
-      return;
-    }
-    if (countQualities(topQualities) > MAX_QUALITIES) {
-      Alert.alert('Error', `Top qualities can have at most ${MAX_QUALITIES} items.`);
-      return;
-    }
+  setLoading(true);
+  try {
+    const pictures = await buildPicturesFromUris(
+      selectedImages,
+      topQualities.trim() || undefined
+    );
 
-    setLoading(true);
-    try {
-      // Convert image to base64 if an image was selected
-      const pictures = selectedImage ? [{ url: selectedImage, caption: topQualities || description }] : undefined;
+    await apiService.createLocationRequest({
+      name: name.trim(),
+      address: address.trim(),
+      description: description.trim() || undefined,
+      most_known_for: topQualities.trim() || undefined,
+      level_of_business: levelOfBusiness || undefined,
+      pictures,
+    });
 
-      await apiService.createLocationRequest({
-        name: name.trim(),
-        address: address.trim(),
-        description: description.trim() || undefined,
-        most_known_for: topQualities.trim() || undefined,
-        level_of_business: levelOfBusiness || undefined,
-        pictures,
-      });
-      Alert.alert('Success', 'Request submitted successfully! An admin will review it.', [
-        { text: 'OK', onPress: () => {
-          setName('');
-          setAddress('');
-          setDescription('');
-          setTopQualities('');
-          setLevelOfBusiness('');
-          setSelectedImage(null);
-          loadRequests();
-        }},
-      ]);
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Failed to submit request');
-    } finally {
-      setLoading(false);
-    }
-  };
+    Alert.alert('Success', 'Request submitted successfully! An admin will review it.', [
+      { text: 'OK', onPress: () => {
+        setName('');
+        setAddress('');
+        setDescription('');
+        setTopQualities('');
+        setLevelOfBusiness('');
+        setSelectedImages([]); // reset
+        loadRequests();
+      }},
+    ]);
+  } catch (error: any) {
+    Alert.alert('Error', error.response?.data?.detail || 'Failed to submit request');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleSubmitAnnouncementRequest = async () => {
     if (!studentAnnouncementTitle.trim() || !studentAnnouncementBody.trim()) {
@@ -1543,30 +1428,10 @@ export default function RequestScreen() {
     setShowDetailModal(true);
   };
 
-  const pickEditImage = async () => {
-    // Request permission
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
-      return;
-    }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6,
-      base64: true,
-    });
 
-    if (!result.canceled && result.assets[0]) {
-      const imageUri = getPickerAssetUri(result.assets[0]);
-      if (imageUri) {
-        setEditSelectedImage(imageUri);
-      }
-    }
-  };
+
+
 
   const handleUpdateRequest = async () => {
     if (!selectedRequest) return;
@@ -1581,26 +1446,31 @@ export default function RequestScreen() {
     }
 
     setLoading(true);
-    try {
-      const pictures = editSelectedImage ? [{ url: editSelectedImage, caption: editDescription }] : undefined;
+try {
+  const picturesArr = await apiService.buildPicturesFromUris(
+    editSelectedImage ? [editSelectedImage] : [],
+    editTopQualities.trim() || undefined
+  );
 
-      await apiService.updateLocationRequest(selectedRequest.id, {
-        name: editName.trim(),
-        address: editAddress.trim(),
-        description: editDescription.trim() || undefined,
-        most_known_for: editTopQualities || undefined,
-        level_of_business: editLevelOfBusiness || undefined,
-        pictures,
-        admin_notes: editAdminNotes || undefined,
-      });
-      Alert.alert('Success', 'Request updated successfully!');
-      loadRequests();
-      setShowDetailModal(false);
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Failed to update request');
-    } finally {
-      setLoading(false);
-    }
+  await apiService.updateLocationRequest(selectedRequest.id, {
+    name: editName.trim(),
+    address: editAddress.trim(),
+    description: editDescription.trim() || undefined,
+    most_known_for: editTopQualities.trim() || undefined,
+    level_of_business: editLevelOfBusiness || undefined,
+    pictures: picturesArr.length ? picturesArr : undefined,
+    admin_notes: editAdminNotes.trim() || undefined,
+  });
+
+  Alert.alert("Success", "Request updated successfully!");
+  loadRequests();
+  setShowDetailModal(false);
+} catch (error: any) {
+  Alert.alert("Error", error.response?.data?.detail || "Failed to update request");
+} finally {
+  setLoading(false);
+}
+
   };
 
   const handleSubmitRequestAsLocation = async () => {
@@ -1617,7 +1487,12 @@ export default function RequestScreen() {
 
     setLoading(true);
     try {
-      const pictures = editSelectedImage ? [{ url: editSelectedImage, caption: editTopQualities }] : undefined;
+      const pictures = await apiService.buildPicturesFromUris(
+        editSelectedImage ? [editSelectedImage] : [],
+        editTopQualities.trim() || undefined
+);
+
+      
 
       // Create location from request
       await apiService.createLocation({
@@ -1801,25 +1676,33 @@ export default function RequestScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <ThemedText style={styles.label}>Image (optional)</ThemedText>
-                {selectedImage ? (
-                  <View style={styles.imagePreviewContainer}>
-                    <Image source={{ uri: selectedImage }} style={styles.imagePreview} resizeMode="cover" />
-                    <TouchableOpacity
-                      style={styles.removeImageButton}
-                      onPress={() => setSelectedImage(null)}>
-                      <ThemedText style={styles.removeImageButtonText}>Remove Image</ThemedText>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.imagePickerButton}
-                    onPress={pickImage}
-                    activeOpacity={0.7}>
-                    <ThemedText style={styles.imagePickerButtonText}>Choose from Camera Roll</ThemedText>
-                  </TouchableOpacity>
+                <ThemedText style={styles.label}>Images (optional)</ThemedText>
+
+                <TouchableOpacity
+                  style={styles.imagePickerButton}
+                  onPress={pickImagesForLocationRequest}
+                  activeOpacity={0.7}>
+                  <ThemedText style={styles.imagePickerButtonText}>
+                    {selectedImages.length > 0 ? 'Add Photos' : 'Choose from Camera Roll'}
+                  </ThemedText>
+                </TouchableOpacity>
+
+                {selectedImages.length > 0 && (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagePreviewRow}>
+                    {selectedImages.map((uri, idx) => (
+                      <View key={`${uri}-${idx}`} style={styles.imagePreviewThumbWrap}>
+                        <Image source={{ uri }} style={styles.imagePreviewThumb} resizeMode="cover" />
+                        <TouchableOpacity
+                          style={styles.removeImageButton}
+                          onPress={() => setSelectedImages((prev) => prev.filter((_, i) => i !== idx))}>
+                          <ThemedText style={styles.removeImageButtonText}>Remove</ThemedText>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
                 )}
               </View>
+
 
               <TouchableOpacity
                 style={[styles.submitButton, loading && styles.submitButtonDisabled]}
@@ -2505,14 +2388,33 @@ export default function RequestScreen() {
 
                 <View style={styles.inputGroup}>
                   <ThemedText style={styles.label}>Image</ThemedText>
+
                   <TouchableOpacity
                     style={styles.imagePickerButton}
                     onPress={pickEditImage}
-                    activeOpacity={0.7}>
+                    activeOpacity={0.7}
+                  >
                     <ThemedText style={styles.imagePickerButtonText}>
-                      {editSelectedImage ? 'Change Image' : 'Choose from Camera Roll'}
+                      {editSelectedImage ? "Change Image" : "Choose from Camera Roll"}
                     </ThemedText>
                   </TouchableOpacity>
+
+                  {editSelectedImage ? (
+                    <View style={{ marginTop: 12 }}>
+                      <Image
+                        source={{ uri: editSelectedImage }}
+                        style={{ width: "100%", height: 180, borderRadius: 12 }}
+                        resizeMode="cover"
+                      />
+                      <TouchableOpacity
+                        onPress={() => setEditSelectedImage(null)}
+                        style={{ marginTop: 10 }}
+                        activeOpacity={0.7}
+                      >
+                        <ThemedText>Remove Image</ThemedText>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
                 </View>
 
                 <View style={styles.inputGroup}>

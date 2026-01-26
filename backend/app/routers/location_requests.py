@@ -1,20 +1,29 @@
 # app/routers/location_requests.py
 from __future__ import annotations
 
-import json
-from typing import Literal, Optional, cast
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import delete, insert, select, update
 
 from app.db import get_conn, location_requests, locations, new_id, utcnow_iso
 from app.deps import CurrentUser, get_current_user, require_admin
-from app.routers.locations import LocationPicture, _parse_pictures_json, _serialize_pictures, _ensure_qualities_limit
-from sqlalchemy import insert, select, update, delete
+from app.routers.locations import (
+    LocationPicture,
+    _ensure_qualities_limit,
+    _parse_pictures_json,
+    _serialize_pictures,
+)
 
 router = APIRouter(prefix="/location-requests", tags=["location-requests"])
 
+RequestStatus = Literal["pending", "submitted", "approved", "denied"]
 
+
+# ===============================
+# Models
+# ===============================
 class LocationRequestBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     address: str = Field(min_length=1)  # Complete address
@@ -39,7 +48,7 @@ class LocationRequestResponse(BaseModel):
     requested_by: str
     requested_by_name: str
     requested_by_email: str
-    status: Literal["pending", "submitted", "approved", "denied"]
+    status: RequestStatus
     admin_notes: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_by_name: Optional[str] = None
@@ -53,7 +62,7 @@ class ApproveRequestRequest(BaseModel):
 
 class ApproveLocationResponse(BaseModel):
     location_id: str
-    message: str = "Location created and request removed from Student Requests."
+    message: str = "Location created and request marked as approved."
 
 
 class DenyRequestRequest(BaseModel):
@@ -61,7 +70,7 @@ class DenyRequestRequest(BaseModel):
 
 
 class UpdateStatusRequest(BaseModel):
-    status: Literal["pending", "submitted", "approved", "denied"] = Field(..., description="New status")
+    status: RequestStatus = Field(..., description="New status")
     admin_notes: Optional[str] = None
 
 
@@ -69,6 +78,9 @@ class UpdateLocationRequestRequest(LocationRequestBase):
     admin_notes: Optional[str] = None
 
 
+# ===============================
+# Student: Create request
+# ===============================
 @router.post("", response_model=LocationRequestResponse, status_code=status.HTTP_201_CREATED)
 def create_location_request(
     req: CreateLocationRequest,
@@ -106,7 +118,8 @@ def create_location_request(
         name=req.name.strip(),
         address=req.address.strip(),
         pictures=req.pictures,
-        most_known_for=req.most_known_for,
+        description=req.description.strip() if req.description else None,
+        most_known_for=req.most_known_for.strip() if req.most_known_for else None,
         level_of_business=req.level_of_business,
         requested_by=user.user_id,
         requested_by_name=user.name,
@@ -120,42 +133,39 @@ def create_location_request(
     )
 
 
+# ===============================
+# List requests (student: own only, admin: org)
+# ===============================
 @router.get("", response_model=list[LocationRequestResponse])
 def list_location_requests(
-    status_filter: Optional[Literal["pending", "submitted", "approved", "denied"]] = Query(None, description="Filter by status"),
+    status_filter: Optional[RequestStatus] = Query(None, description="Filter by status"),
     my_requests_only: bool = Query(False, description="Show only my requests (students)"),
     user: CurrentUser = Depends(get_current_user),
 ) -> list[LocationRequestResponse]:
     """
     List location requests.
     Students see only their own requests.
-    Admins see all requests in their organization.
+    Admins see all requests in their organization (or can set my_requests_only=true).
     """
     from app.db import users
 
     with get_conn() as conn:
         query = select(location_requests).where(location_requests.c.org_id == user.org_id)
 
-        # Students only see their own requests
         if user.role != "admin" or my_requests_only:
             query = query.where(location_requests.c.requested_by == user.user_id)
 
-        # Filter by status if provided
         if status_filter:
             query = query.where(location_requests.c.status == status_filter)
 
-        query = query.order_by(location_requests.c.created_at.desc())
+        rows = conn.execute(query.order_by(location_requests.c.created_at.desc())).mappings().all()
 
-        rows = conn.execute(query).mappings().all()
-
-        result = []
+        result: list[LocationRequestResponse] = []
         for row in rows:
-            # Get requester info
             requester_row = conn.execute(
                 select(users.c.name, users.c.email).where(users.c.id == row["requested_by"])
             ).mappings().first()
 
-            # Get reviewer info if exists
             reviewer_row = None
             if row["reviewed_by"]:
                 reviewer_row = conn.execute(
@@ -183,10 +193,12 @@ def list_location_requests(
                 )
             )
 
-    return result
+        return result
 
 
-
+# ===============================
+# Admin: Approve (create location + mark approved; do NOT delete request)
+# ===============================
 @router.put("/{request_id}/approve", response_model=ApproveLocationResponse)
 def approve_location_request(
     request_id: str,
@@ -194,8 +206,7 @@ def approve_location_request(
     admin: CurrentUser = Depends(require_admin),
 ) -> ApproveLocationResponse:
     """
-    Admin-only: create location from request, then delete the request so it no longer
-    appears in Student Requests. The new location appears in Manage Locations (Posted).
+    Admin-only: create a Location from the request, then mark the request approved.
     """
     with get_conn() as conn, conn.begin():
         request_row = conn.execute(
@@ -206,10 +217,7 @@ def approve_location_request(
         ).mappings().first()
 
         if not request_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Location request not found",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location request not found")
 
         if str(request_row["status"]) not in ["pending", "submitted"]:
             raise HTTPException(
@@ -219,13 +227,15 @@ def approve_location_request(
 
         location_id = new_id()
         now = utcnow_iso()
+
+        # Create the location from the request
         conn.execute(
             insert(locations).values(
                 id=location_id,
                 org_id=admin.org_id,
                 name=str(request_row["name"]),
                 address=str(request_row["address"]),
-                pictures=request_row["pictures"],
+                pictures=request_row["pictures"],  # already JSON text
                 rating="0.0",
                 reviews_count="0",
                 description=request_row.get("description"),
@@ -234,14 +244,31 @@ def approve_location_request(
                 created_by=admin.user_id,
                 is_active=True,
                 created_at=now,
+                updated_at=None,
             )
         )
 
-        conn.execute(delete(location_requests).where(location_requests.c.id == request_id))
+        # Mark request approved
+        conn.execute(
+            update(location_requests)
+            .where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
+            .values(
+                status="approved",
+                admin_notes=req.admin_notes.strip() if req.admin_notes else None,
+                reviewed_by=admin.user_id,
+                reviewed_at=now,
+            )
+        )
 
         return ApproveLocationResponse(location_id=location_id)
 
 
+# ===============================
+# Admin: Deny
+# ===============================
 @router.put("/{request_id}/deny", response_model=LocationRequestResponse)
 def deny_location_request(
     request_id: str,
@@ -254,7 +281,6 @@ def deny_location_request(
     from app.db import users
 
     with get_conn() as conn, conn.begin():
-        # Get request
         request_row = conn.execute(
             select(location_requests).where(
                 location_requests.c.id == request_id,
@@ -263,10 +289,7 @@ def deny_location_request(
         ).mappings().first()
 
         if not request_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Location request not found",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location request not found")
 
         if str(request_row["status"]) not in ["pending", "submitted"]:
             raise HTTPException(
@@ -274,11 +297,14 @@ def deny_location_request(
                 detail=f"Request has already been {request_row['status']}",
             )
 
-        # Update request status
         now = utcnow_iso()
+
         conn.execute(
             update(location_requests)
-            .where(location_requests.c.id == request_id)
+            .where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
             .values(
                 status="denied",
                 admin_notes=req.admin_notes.strip(),
@@ -287,12 +313,13 @@ def deny_location_request(
             )
         )
 
-        # Fetch updated request
         updated_row = conn.execute(
-            select(location_requests).where(location_requests.c.id == request_id)
+            select(location_requests).where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
         ).mappings().first()
 
-        # Get requester and reviewer info
         requester_row = conn.execute(
             select(users.c.name, users.c.email).where(users.c.id == updated_row["requested_by"])
         ).mappings().first()
@@ -313,14 +340,17 @@ def deny_location_request(
             requested_by_name=str(requester_row["name"]) if requester_row else "Unknown",
             requested_by_email=str(requester_row["email"]) if requester_row else "Unknown",
             status="denied",
-            admin_notes=str(updated_row["admin_notes"]),
-            reviewed_by=str(updated_row["reviewed_by"]),
+            admin_notes=str(updated_row["admin_notes"]) if updated_row["admin_notes"] else None,
+            reviewed_by=str(updated_row["reviewed_by"]) if updated_row["reviewed_by"] else None,
             reviewed_by_name=str(reviewer_row["name"]) if reviewer_row else admin.name,
-            reviewed_at=str(updated_row["reviewed_at"]),
+            reviewed_at=str(updated_row["reviewed_at"]) if updated_row["reviewed_at"] else None,
             created_at=str(updated_row["created_at"]),
         )
 
 
+# ===============================
+# Admin: Update status (generic)
+# ===============================
 @router.put("/{request_id}/status", response_model=LocationRequestResponse)
 def update_request_status(
     request_id: str,
@@ -328,51 +358,47 @@ def update_request_status(
     admin: CurrentUser = Depends(require_admin),
 ) -> LocationRequestResponse:
     """
-    Admin-only endpoint to update request status to any value (pending, approved, denied).
+    Admin-only endpoint to update request status to any value.
     """
     from app.db import users
 
     with get_conn() as conn, conn.begin():
-        # Get request
-        request_row = conn.execute(
+        existing = conn.execute(
             select(location_requests).where(
                 location_requests.c.id == request_id,
                 location_requests.c.org_id == admin.org_id,
             )
         ).mappings().first()
 
-        if not request_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Location request not found",
-            )
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location request not found")
 
-        # Note: Admins can change status from submitted to approved/denied
-        # This check is handled by the approve/deny endpoints
-
-        # Update request status
         now = utcnow_iso()
-        update_values = {
+
+        update_values: dict[str, object] = {
             "status": req.status,
             "reviewed_by": admin.user_id,
             "reviewed_at": now,
         }
-        
         if req.admin_notes is not None:
             update_values["admin_notes"] = req.admin_notes.strip() if req.admin_notes else None
 
         conn.execute(
             update(location_requests)
-            .where(location_requests.c.id == request_id)
+            .where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
             .values(**update_values)
         )
 
-        # Fetch updated request
         updated_row = conn.execute(
-            select(location_requests).where(location_requests.c.id == request_id)
+            select(location_requests).where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
         ).mappings().first()
 
-        # Get requester and reviewer info
         requester_row = conn.execute(
             select(users.c.name, users.c.email).where(users.c.id == updated_row["requested_by"])
         ).mappings().first()
@@ -401,6 +427,9 @@ def update_request_status(
         )
 
 
+# ===============================
+# Admin: Update request fields
+# ===============================
 @router.put("/{request_id}", response_model=LocationRequestResponse)
 def update_location_request(
     request_id: str,
@@ -408,30 +437,29 @@ def update_location_request(
     admin: CurrentUser = Depends(require_admin),
 ) -> LocationRequestResponse:
     """
-    Admin-only endpoint to update location request details (name, address, description, etc.).
+    Admin-only endpoint to update location request details (NOT status).
     """
     from app.db import users
 
     with get_conn() as conn, conn.begin():
-        # Get request
-        request_row = conn.execute(
+        existing = conn.execute(
             select(location_requests).where(
                 location_requests.c.id == request_id,
                 location_requests.c.org_id == admin.org_id,
             )
         ).mappings().first()
 
-        if not request_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Location request not found",
-            )
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location request not found")
 
         _ensure_qualities_limit(req.most_known_for)
-        # Update request fields
+
         conn.execute(
             update(location_requests)
-            .where(location_requests.c.id == request_id)
+            .where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
             .values(
                 name=req.name.strip(),
                 address=req.address.strip(),
@@ -443,12 +471,13 @@ def update_location_request(
             )
         )
 
-        # Fetch updated request
         updated_row = conn.execute(
-            select(location_requests).where(location_requests.c.id == request_id)
+            select(location_requests).where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == admin.org_id,
+            )
         ).mappings().first()
 
-        # Get requester and reviewer info
         requester_row = conn.execute(
             select(users.c.name, users.c.email).where(users.c.id == updated_row["requested_by"])
         ).mappings().first()
@@ -479,6 +508,9 @@ def update_location_request(
         )
 
 
+# ===============================
+# Delete request (hard delete)
+# ===============================
 @router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_location_request(
     request_id: str,
@@ -487,10 +519,9 @@ def delete_location_request(
     """
     Delete a location request.
     Students can only delete their own requests (hard delete).
-    Admins can delete any request in their organization (hard delete).
+    Admins can delete any request in their organization.
     """
     with get_conn() as conn, conn.begin():
-        # Get request
         request_row = conn.execute(
             select(location_requests).where(
                 location_requests.c.id == request_id,
@@ -499,19 +530,14 @@ def delete_location_request(
         ).mappings().first()
 
         if not request_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Location request not found",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location request not found")
 
-        # Check permission: students can only delete their own requests
         if user.role != "admin" and str(request_row["requested_by"]) != user.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only delete your own requests",
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own requests")
 
-        # Hard delete the request
         conn.execute(
-            delete(location_requests).where(location_requests.c.id == request_id)
+            delete(location_requests).where(
+                location_requests.c.id == request_id,
+                location_requests.c.org_id == user.org_id,
+            )
         )
