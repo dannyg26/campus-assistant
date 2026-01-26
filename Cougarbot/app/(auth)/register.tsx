@@ -36,29 +36,24 @@ export default function RegisterScreen() {
   }, []);
 
   const loadUniversities = async () => {
-    try {
-      const orgs = await apiService.getOrganizations();
-      const orgList = Array.isArray(orgs) ? orgs : orgs?.data || orgs?.orgs || [];
-      const orgNames = orgList
-        .map((org: any) => org.name || org.id || org)
-        .filter(Boolean);
+  try {
+    const orgs = await apiService.getOrganizations(); // Organization[]
 
-      if (orgNames.length > 0) {
-        setUniversities(orgNames);
-      } else {
-        setUniversities(['outlook', 'outlook.com']);
-      }
-    } catch (error: any) {
-      // Don't use fallback - show error to user
-      Alert.alert(
-        'Connection Error',
-        'Could not connect to server. Make sure:\n\n1. Backend is running: python -m uvicorn main:app --reload --host 0.0.0.0\n2. Phone and laptop are on same WiFi\n3. Firewall allows port 8000\n\nCheck console for details.',
-        [{ text: 'OK' }]
-      );
-      // Only use fallback if we're sure it's a network issue
-      setUniversities([]);
-    }
-  };
+    const orgNames = orgs
+      .map((org) => org.name)
+      .filter(Boolean);
+
+    setUniversities(orgNames.length ? orgNames : [""]);
+  } catch (error: any) {
+    Alert.alert(
+      "Connection Error",
+      "Could not connect to server. Make sure:\n\n1. Backend is running\n2. Same WiFi\n3. Firewall allows port 8000",
+      [{ text: "OK" }]
+    );
+    setUniversities([]);
+  }
+};
+
 
   const onRefresh = async () => {
     setRefreshing(true);

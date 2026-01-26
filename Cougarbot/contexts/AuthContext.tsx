@@ -80,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             role: profile.role,
             email: profile.email,
             name: profile.name,
-            profile_pic: profile.profile_pic,
+            profile_pic:  profile.profile_pic ?? undefined,
           });
         } catch (profileError) {
           // Fallback if profile fetch fails
@@ -121,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: profile.role,
         email: profile.email || fallback?.email || '',
         name: profile.name || fallback?.name || '',
-        profile_pic: profile.profile_pic,
+        profile_pic:  profile.profile_pic ?? undefined,
       });
     } catch (profileError) {
       const payload = decodeJWT(tokens.access_token);
@@ -174,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: profile.role,
         email: profile.email,
         name: profile.name,
-        profile_pic: profile.profile_pic,
+        profile_pic:  profile.profile_pic ?? undefined,
       });
     } catch (error) {}
   };

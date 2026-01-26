@@ -2,6 +2,7 @@
 import * as ImagePicker from "expo-image-picker";
 import type { ImagePickerAsset } from "expo-image-picker";
 
+
 const MAX_IMAGE_BYTES = 4_000_000; // 4MB safe cap for base64 uploads
 
 /**

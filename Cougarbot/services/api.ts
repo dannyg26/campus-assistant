@@ -24,6 +24,12 @@ const getApiBaseUrl = (): string => {
 export const API_BASE_URL = getApiBaseUrl();
 const TOKEN_KEY = "@cougarbot:access_token";
 
+
+export type Organization = {
+  id: string;
+  name: string;
+};
+
 // ===============================
 // Helpers
 // ===============================
@@ -115,7 +121,7 @@ export type ActivityLevel = "low" | "moderate" | "high";
 export type ActivityRatingsResponse = {
   ratings: { level: ActivityLevel; created_at: string }[];
   can_rate: boolean;
-  cooldown_until: string | null; // ✅ NOT optional
+  cooldown_until: string | null; // NOT optional (matches your state type expectation)
 };
 
 // Reviews (matches your backend response shape)
@@ -160,6 +166,16 @@ function normalizeReview(r: ReviewResponse): Review {
   };
 }
 
+// Profile shape used by AuthContext.getMyProfile()
+export type MyProfile = {
+  id: string;
+  org_id?: string;
+  role: "admin" | "student";
+  email: string;
+  name: string;
+  profile_pic?: string | null;
+};
+
 // ===============================
 // ApiService (SINGLE CLASS ONLY)
 // ===============================
@@ -193,8 +209,32 @@ class ApiService {
     );
   }
 
+  
+
+
+   async getOrganizations(): Promise<Organization[]> {
+    const data = (await this.api.get("/orgs")).data as any;
+
+    // support different backend shapes: [..] OR { orgs: [..] } OR { data: [..] }
+    const list: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.orgs)
+      ? data.orgs
+      : Array.isArray(data?.data)
+      ? data.data
+      : [];
+
+    return list
+      .map((o: any) => ({
+        id: String(o?.id ?? ""),
+        name: String(o?.name ?? o?.id ?? ""),
+      }))
+      .filter((o) => o.id || o.name);
+  }
+
+
   // ===============================
-  // Auth
+  // Token helpers (required by AuthContext)
   // ===============================
   async setToken(token: string | null) {
     token
@@ -202,6 +242,18 @@ class ApiService {
       : await AsyncStorage.removeItem(TOKEN_KEY);
   }
 
+  async getToken(): Promise<string | null> {
+    return AsyncStorage.getItem(TOKEN_KEY);
+  }
+
+  async logout(): Promise<void> {
+    // Client-side logout: clear token. (If you have a backend logout endpoint later, call it here too.)
+    await AsyncStorage.removeItem(TOKEN_KEY);
+  }
+
+  // ===============================
+  // Auth
+  // ===============================
   async login(orgId: string, email: string, password: string) {
     return (
       await this.api.post("/auth/login", { org_id: orgId, email, password })
@@ -217,6 +269,14 @@ class ApiService {
         password,
       })
     ).data;
+  }
+
+  // Needed by AuthContext
+  async getMyProfile(): Promise<MyProfile> {
+    const data = (await this.api.get("/users/me")).data as any;
+    // normalize profile pic if present
+    if (data?.profile_pic) data.profile_pic = toAbsoluteUrl(data.profile_pic);
+    return data as MyProfile;
   }
 
   // ===============================
@@ -272,16 +332,6 @@ class ApiService {
 
   /**
    * Upload 1..N images for Locations / Location Requests.
-   *
-   * Preferred usage:
-   *  - pass ImagePickerAsset[] from pickImagesBase64() (assets include base64)
-   *
-   * Supported inputs:
-   *  - ImagePickerAsset[] => uses getPickerAssetDataUris(assets) => uploads
-   *  - string[]:
-   *      - http(s) => kept
-   *      - data:   => uploaded
-   *      - file/content/ph => fallback attempt (uriToDataUrl) then upload
    */
   async uploadLocationImages(
     images: string[] | ImagePickerAsset[],
@@ -333,7 +383,6 @@ class ApiService {
           const uploadedUrl = await this.uploadBase64Image(dataUrl);
           out.push({ url: uploadedUrl, caption });
         } catch {
-          // Skip if conversion fails (avoids silent broken pictures)
           continue;
         }
       }
@@ -344,7 +393,6 @@ class ApiService {
 
   /**
    * Convenience helper for single-image flows (Events/Announcements).
-   * Returns a PictureIn (NOT an array) because those features use one image.
    */
   async uploadSinglePicture(
     image: ImagePickerAsset | string | null | undefined,
@@ -406,7 +454,8 @@ class ApiService {
     data: { name?: string; profile_pic?: string }
   ) {
     const payload = { ...data };
-    if (payload.profile_pic) payload.profile_pic = toAbsoluteUrl(payload.profile_pic);
+    if (payload.profile_pic)
+      payload.profile_pic = toAbsoluteUrl(payload.profile_pic);
     return (await this.api.patch(`/users/${userId}`, payload)).data;
   }
 
@@ -422,7 +471,6 @@ class ApiService {
     return normalizeLocationsPictures(data);
   }
 
-  // Get single location by id
   async getLocation(locationId: string) {
     const data = (await this.api.get(`/locations/${locationId}`)).data;
     return normalizePictures(data);
@@ -490,7 +538,7 @@ class ApiService {
     ).data as ReviewResponse;
   }
 
-  // NOTE: returns normalized Review[] so setReviews(...) type-checks
+  // Returns normalized Review[] so setReviews(...) type-checks
   async getReviews(locationId: string): Promise<Review[]> {
     const data = (await this.api.get(`/reviews/locations/${locationId}`))
       .data as ReviewResponse[];
@@ -888,6 +936,8 @@ class ApiService {
     return (await this.api.patch(`/events/${id}`, payload)).data;
   }
 
+
+   
   async deleteEvent(id: string): Promise<void> {
     await this.api.delete(`/events/${id}`);
   }
@@ -895,16 +945,18 @@ class ApiService {
   // ===============================
   // Location Activity Ratings
   // ===============================
- async getLocationActivityRatings(locationId: string): Promise<ActivityRatingsResponse> {
-  const raw = (await this.api.get(`/locations/${locationId}/activity-ratings`)).data as any;
+  async getLocationActivityRatings(
+    locationId: string
+  ): Promise<ActivityRatingsResponse> {
+    const raw = (await this.api.get(`/locations/${locationId}/activity-ratings`))
+      .data as any;
 
-  return {
-    ratings: Array.isArray(raw?.ratings) ? raw.ratings : [],
-    can_rate: Boolean(raw?.can_rate),
-    cooldown_until: raw?.cooldown_until ?? null, // ✅ converts undefined -> null
-  };
-}
-
+    return {
+      ratings: Array.isArray(raw?.ratings) ? raw.ratings : [],
+      can_rate: Boolean(raw?.can_rate),
+      cooldown_until: raw?.cooldown_until ?? null, // converts undefined -> null
+    };
+  }
 
   async submitLocationActivityRating(locationId: string, level: ActivityLevel) {
     return (
